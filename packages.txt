@@ -1,0 +1,3 @@
+unixodbc-dev
+freetds-dev
+chromium
