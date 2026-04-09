@@ -36,16 +36,15 @@ st.divider()
 
 # ==========================================
 # OBJETIVOS (TARGETS T y C)
-# Puedes modificar estos valores según las metas de Fumiscor
 # ==========================================
-TARGET_DT_T = 5.2       # Límite Superior Down Time (Rojo si es mayor)
-TARGET_DT_C = 3.0       # Límite Inferior Down Time (Verde si es menor)
+TARGET_DT_T = 5.2       # Límite Superior Down Time
+TARGET_DT_C = 3.0       # Límite Inferior Down Time
 
 TARGET_MTTR_T = 30      # Límite Superior MTTR
 TARGET_MTTR_C = 20      # Límite Inferior MTTR
 
-TARGET_MTBF_T = 600     # Límite Superior MTBF (Verde si es mayor)
-TARGET_MTBF_C = 500     # Límite Inferior MTBF (Rojo si es menor)
+TARGET_MTBF_T = 600     # Límite Superior MTBF
+TARGET_MTBF_C = 500     # Límite Inferior MTBF
 
 # ==========================================
 # FILTROS
@@ -94,7 +93,6 @@ def fetch_annual_data(anio):
         df_anual = pd.merge(df_meses, df_uptime, on='Mes', how='left')
         df_anual = pd.merge(df_anual, df_fallas, on='Mes', how='left').fillna(0)
         
-        # Datos del mes (Para la fila A)
         df_anual['Uptime_Min'] = df_anual['Tiempo_Productivo_Min']
         df_anual['Downtime_Min'] = df_anual['Tiempo_Reparacion_Min']
         
@@ -141,19 +139,16 @@ def crear_pdf_pd_excel(df_data, anio):
         fig = go.Figure()
         text_format = [f"{v:.1f}%" if is_pct else f"{v:.0f}" for v in df_filtered[col_real]]
         
-        # Valores Reales (Fila A)
         fig.add_trace(go.Bar(
             x=df_filtered['Mes_Str'], y=df_filtered[col_real], name="Real (A)",
             marker_color='#1f77b4', text=text_format, textposition='auto', textfont=dict(size=12)
         ))
         
-        # Línea Límite Superior (T)
         fig.add_trace(go.Scatter(
             x=df_plot['Mes_Str'], y=[obj_t] * 12, name="Sup. (T)",
             mode='lines', line=dict(color='red', dash='dash', width=2)
         ))
         
-        # Línea Límite Inferior (C)
         fig.add_trace(go.Scatter(
             x=df_plot['Mes_Str'], y=[obj_c] * 12, name="Inf. (C)",
             mode='lines', line=dict(color='orange', dash='dot', width=2)
@@ -161,11 +156,11 @@ def crear_pdf_pd_excel(df_data, anio):
         
         y_title = "Porcentaje (%)" if is_pct else "Minutos"
         
-        # Aumentamos los márgenes para asegurar que nada se corte
         fig.update_layout(
             yaxis=dict(title=dict(text=y_title, font=dict(size=10)), tickfont=dict(size=9)),
             xaxis=dict(tickfont=dict(size=10)),
-            margin=dict(l=40, r=10, t=10, b=30), 
+            # Se aumentó el margen superior (t=25) para darle aire internamente al gráfico
+            margin=dict(l=40, r=10, t=25, b=30), 
             height=200, width=550, 
             showlegend=True,
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=10)),
@@ -185,15 +180,15 @@ def crear_pdf_pd_excel(df_data, anio):
         pdf.set_text_color(255, 255, 255); pdf.set_fill_color(31, 78, 121); pdf.set_draw_color(0, 0, 0); pdf.set_line_width(0.2)
         pdf.cell(w_tot, 6, "  " + titulo, border=1, align='L', fill=True)
 
-        # --- 2. DIBUJAR GRÁFICO (Con amplio margen superior e inferior) ---
+        # --- 2. DIBUJAR GRÁFICO (Con más espacio respecto al título) ---
         img_path = generar_grafico_tendencia_pdf(df_data, col_real, obj_t, obj_c, is_pct)
-        # Se baja el gráfico para que no toque el título y se le da más altura
-        pdf.image(img_path, x=x, y=y + 8, w=w_tot, h=45)
+        # Bajamos la imagen a y+12 para separarla del bloque azul
+        pdf.image(img_path, x=x, y=y + 12, w=w_tot, h=45)
         os.remove(img_path)
 
         # --- 3. DIBUJAR TABLA (T, C, A) ---
-        # Empujamos la tabla más abajo para separar del gráfico
-        y_tabla = y + 55 
+        # Bajamos la tabla a y+62 para que no pise el gráfico
+        y_tabla = y + 62 
         pdf.set_xy(x, y_tabla)
         pdf.set_fill_color(221, 235, 247) 
         
@@ -202,7 +197,7 @@ def crear_pdf_pd_excel(df_data, anio):
         for m in meses_nombres: 
             pdf.cell(w_m, 5, m, border=1, align='C', fill=True)
             
-        # Fila T (Objetivo Superior)
+        # Fila T 
         pdf.set_xy(x, y_tabla + 5)
         pdf.set_font("Arial", 'B', 8)
         pdf.cell(w_lbl, 5, "T", border=1, align='C', fill=True)
@@ -211,7 +206,7 @@ def crear_pdf_pd_excel(df_data, anio):
         for _ in range(12): 
             pdf.cell(w_m, 5, t_str, border=1, align='C')
             
-        # Fila C (Objetivo Inferior)
+        # Fila C 
         pdf.set_xy(x, y_tabla + 10)
         pdf.set_font("Arial", 'B', 8)
         pdf.set_fill_color(221, 235, 247); pdf.set_text_color(0,0,0)
@@ -221,7 +216,7 @@ def crear_pdf_pd_excel(df_data, anio):
         for _ in range(12): 
             pdf.cell(w_m, 5, c_str, border=1, align='C')
             
-        # Fila A (Valores Mensuales Reales)
+        # Fila A 
         pdf.set_xy(x, y_tabla + 15)
         pdf.set_font("Arial", 'B', 8)
         pdf.set_fill_color(221, 235, 247); pdf.set_text_color(0,0,0)
@@ -230,19 +225,17 @@ def crear_pdf_pd_excel(df_data, anio):
         
         for i in range(1, 13):
             val_a = df_data[df_data['Mes'] == i][col_real].values[0]
-            # Solo mostramos datos si hubo producción ese mes
             if df_data[df_data['Mes'] == i]['Tiempo_Total_Disponible_Min'].values[0] > 0:
                 val_str = f"{val_a:.1f}%" if is_pct else f"{val_a:.0f}" 
                 
-                # LÓGICA DE COLOR (Verde, Rojo, Amarillo)
-                if is_lower_better: # Para DT y MTTR (Menor es mejor)
-                    if val_a <= obj_c: pdf.set_text_color(33, 195, 84)       # Verde si alcanza o supera el obj inferior
-                    elif val_a > obj_t: pdf.set_text_color(220, 20, 20)      # Rojo si sobrepasa el límite superior
-                    else: pdf.set_text_color(200, 150, 0)                    # Amarillo/Naranja si está en el medio
-                else: # Para MTBF (Mayor es mejor)
-                    if val_a >= obj_t: pdf.set_text_color(33, 195, 84)       # Verde si supera el objetivo superior
-                    elif val_a < obj_c: pdf.set_text_color(220, 20, 20)      # Rojo si cae bajo el límite inferior
-                    else: pdf.set_text_color(200, 150, 0)                    # Amarillo/Naranja si está en el medio
+                if is_lower_better:
+                    if val_a <= obj_c: pdf.set_text_color(33, 195, 84)       
+                    elif val_a > obj_t: pdf.set_text_color(220, 20, 20)      
+                    else: pdf.set_text_color(200, 150, 0)                    
+                else:
+                    if val_a >= obj_t: pdf.set_text_color(33, 195, 84)       
+                    elif val_a < obj_c: pdf.set_text_color(220, 20, 20)      
+                    else: pdf.set_text_color(200, 150, 0)                    
             else:
                 val_str = "-"
                 pdf.set_text_color(150, 150, 150) 
@@ -251,12 +244,11 @@ def crear_pdf_pd_excel(df_data, anio):
         pdf.set_text_color(0,0,0) 
 
     # --- DIBUJAR LOS BLOQUES ESPACIADOS ---
-    # Fila 1: Down Time (Izquierda) y MTTR (Derecha) - Y=15
     dibujar_bloque_completo(x=15, y=15, titulo="Down Time Matriceria", obj_t=TARGET_DT_T, obj_c=TARGET_DT_C, col_real='DT (%)', is_lower_better=True, is_pct=True)
     dibujar_bloque_completo(x=150, y=15, titulo="MTTR - Tiempo medio parada (Min)", obj_t=TARGET_MTTR_T, obj_c=TARGET_MTTR_C, col_real='MTTR (Min)', is_lower_better=True)
     
-    # Fila 2: MTBF (Abajo Izquierda) - Y=105 (Añadimos mucho espacio vertical)
-    dibujar_bloque_completo(x=15, y=105, titulo="MTBF - Tiempo medio entre fallas (Min)", obj_t=TARGET_MTBF_T, obj_c=TARGET_MTBF_C, col_real='MTBF (Min)', is_lower_better=False)
+    # Bajamos la Fila 2 a Y=110 para asegurar que no roce nada de la tabla superior
+    dibujar_bloque_completo(x=15, y=110, titulo="MTBF - Tiempo medio entre fallas (Min)", obj_t=TARGET_MTBF_T, obj_c=TARGET_MTBF_C, col_real='MTBF (Min)', is_lower_better=False)
 
     return pdf.output(dest='S').encode('latin-1')
 
@@ -310,7 +302,6 @@ if not df_anual.empty:
     
     st.divider()
     st.write("📥 **Exportar Documento PD (Formato Excel T, C, A)**")
-    st.info("Descarga el PDF con los gráficos espaciados, límites Superior (T) e Inferior (C), y los valores reales mensuales (A).")
     try:
         pdf_bytes = crear_pdf_pd_excel(df_anual, anio_sel)
         st.download_button(
