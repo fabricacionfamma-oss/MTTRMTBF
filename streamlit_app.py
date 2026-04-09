@@ -13,12 +13,12 @@ st.set_page_config(page_title="KPIs Mantenimiento - Matricería", layout="wide",
 
 st.markdown("""
 <style>
-    .metric-card {
-        background-color: #f8f9fa;
-        padding: 15px;
-        border-radius: 8px;
+    .filter-box {
+        background-color: #f0f2f6;
+        padding: 20px;
+        border-radius: 10px;
         border-left: 5px solid #1f77b4;
-        box-shadow: 2px 2px 5px rgba(0,0,0,0.1);
+        margin-bottom: 20px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -26,34 +26,35 @@ st.markdown("""
 col_title, col_btn = st.columns([4, 1])
 with col_title:
     st.title("⚙️ Análisis de MTBF, MTTR y Down Time")
-    st.write("Dashboard dinámico (Selecciona los meses para generar el reporte).")
+    st.write("Dashboard Dinámico (T = Límite Sup, C = Límite Inf, A = Real Mensual).")
 with col_btn:
     if st.button("Limpiar Caché", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
-st.divider()
-
 # ==========================================
 # OBJETIVOS (TARGETS T y C)
 # ==========================================
-TARGET_DT_T = 5.2       # Límite Superior Down Time
-TARGET_DT_C = 3.0       # Límite Inferior Down Time
+TARGET_DT_T = 5.2       
+TARGET_DT_C = 3.0       
 
-TARGET_MTTR_T = 30      # Límite Superior MTTR
-TARGET_MTTR_C = 20      # Límite Inferior MTTR
+TARGET_MTTR_T = 30      
+TARGET_MTTR_C = 20      
 
-TARGET_MTBF_T = 600     # Límite Superior MTBF
-TARGET_MTBF_C = 500     # Límite Inferior MTBF
+TARGET_MTBF_T = 600     
+TARGET_MTBF_C = 500     
 
 # ==========================================
-# FILTROS DINÁMICOS
+# FILTROS DINÁMICOS (RECORTADO PARA VISIBILIDAD)
 # ==========================================
-col_f1, col_f2 = st.columns(2)
+st.markdown('<div class="filter-box">', unsafe_allow_html=True)
+st.subheader("🔍 Filtros del Reporte")
+
+col_f1, col_f2 = st.columns([1, 3])
 
 with col_f1:
     anio_actual = pd.to_datetime("today").year
-    anio_sel = st.selectbox("Seleccione el Año para el Análisis y Reporte:", range(2023, anio_actual + 2), index=anio_actual-2023)
+    anio_sel = st.selectbox("1. Seleccione el Año:", range(2023, anio_actual + 2), index=anio_actual-2023)
 
 with col_f2:
     meses_nombres = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
@@ -65,10 +66,17 @@ with col_f2:
     else:
         default_meses = meses_nombres
         
-    meses_sel = st.multiselect("Seleccione los Meses a mostrar en los Cuadros y Gráficos:", meses_nombres, default=default_meses)
-    
+    meses_sel = st.multiselect(
+        "2. Seleccione los Meses a mostrar (elimine los que no desea ver):", 
+        options=meses_nombres, 
+        default=default_meses
+    )
+
+st.markdown('</div>', unsafe_allow_html=True)
+st.divider()
+
 if not meses_sel:
-    st.warning("⚠️ Por favor, seleccione al menos un mes para generar el reporte.")
+    st.warning("⚠️ Por favor, seleccione al menos un mes en el recuadro de arriba para generar el reporte.")
     st.stop()
 
 # Convertir los nombres a sus números (1 al 12)
@@ -139,7 +147,7 @@ def fetch_annual_data(anio):
 df_anual = fetch_annual_data(anio_sel)
 
 # ==========================================
-# GENERADOR PDF (DINÁMICO SEGÚN MESES)
+# GENERADOR PDF DINÁMICO
 # ==========================================
 class ReportePD(FPDF):
     def header(self):
@@ -165,8 +173,6 @@ def crear_pdf_pd_excel(df_data, anio, meses_filtrados):
 
     def generar_grafico_tendencia_pdf(df, col_real, obj_t, obj_c, is_pct):
         df_plot = df[df['Mes'].isin(meses_filtrados)].copy()
-        
-        # Eje X numérico pero como string para evitar que Plotly mezcle meses con la misma letra (ej: Marzo y Mayo)
         df_plot['Eje_X'] = df_plot['Mes'].astype(str)
         
         fig = go.Figure()
@@ -187,7 +193,6 @@ def crear_pdf_pd_excel(df_data, anio, meses_filtrados):
         
         y_title = "Porcentaje (%)" if is_pct else "Minutos"
         
-        # ALINEACIÓN MILIMÉTRICA: margin l=50px equivale al ancho de la celda de T/C/A en el PDF (10mm * 5 = 50px).
         fig.update_layout(
             yaxis=dict(title=dict(text=y_title, font=dict(size=9)), tickfont=dict(size=8)),
             xaxis=dict(showticklabels=False, showgrid=False, zeroline=False, range=[-0.5, num_meses - 0.5]),
@@ -205,7 +210,6 @@ def crear_pdf_pd_excel(df_data, anio, meses_filtrados):
         return tmp_chart.name
 
     def dibujar_bloque_completo(x, y, titulo, obj_t, obj_c, col_real, col_acum, is_lower_better, is_pct=False):
-        # El bloque siempre medirá 118mm en total. Si seleccionas menos meses, las columnas se hacen más anchas.
         w_lbl = 10     
         w_tot = 118 
         w_m = (w_tot - w_lbl) / num_meses 
@@ -282,11 +286,9 @@ def crear_pdf_pd_excel(df_data, anio, meses_filtrados):
 # ==========================================
 if not df_anual.empty:
     
-    # Preparamos los datos filtrados por la selección del usuario para la web
+    meses_nombres_ui = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
     df_visual = df_anual[df_anual['Mes'].isin(meses_activos)].copy()
-    df_visual['Mes_Nombre'] = df_visual['Mes'].apply(lambda x: meses_nombres[x-1])
-    
-    st.subheader(f"📊 Dashboard Mantenimiento Matrices - Año {anio_sel}")
+    df_visual['Mes_Nombre'] = df_visual['Mes'].apply(lambda x: meses_nombres_ui[x-1])
     
     def renderizar_grafico_web(df_vis, col_real, obj_t, obj_c, titulo, is_pct):
         fig = go.Figure()
@@ -310,16 +312,11 @@ if not df_anual.empty:
             margin=dict(l=20, r=20, t=40, b=20), height=250,
             showlegend=True, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             plot_bgcolor='rgba(0,0,0,0)',
-            xaxis=dict(range=[-0.5, len(df_vis) - 0.5]) # Ajusta el grid al total de meses
+            xaxis=dict(range=[-0.5, len(df_vis) - 0.5]) 
         )
         fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='LightGray')
         return fig
 
-    # --- Cuadros (Tablas) en la Web filtradas ---
-    df_show = df_visual[['Mes_Nombre', 'DT (%)', 'MTTR (Min)', 'MTBF (Min)']].set_index('Mes_Nombre').T.round(2)
-    st.dataframe(df_show, use_container_width=True)
-    
-    # --- Gráficos en la Web filtrados ---
     c1, c2 = st.columns(2)
     with c1:
         st.plotly_chart(renderizar_grafico_web(df_visual, 'DT (%)', TARGET_DT_T, TARGET_DT_C, "Down Time Matricería", True), use_container_width=True)
@@ -332,7 +329,7 @@ if not df_anual.empty:
     
     st.divider()
     st.write("📥 **Exportar Documento PD Dinámico**")
-    st.info("El PDF generado reflejará exactamente los meses que hayas seleccionado arriba, ajustando el ancho de las columnas a la perfección.")
+    st.info("El PDF generado reflejará exactamente los meses seleccionados, ajustando el ancho de las columnas a la perfección.")
     
     try:
         pdf_bytes = crear_pdf_pd_excel(df_anual, anio_sel, meses_activos)
