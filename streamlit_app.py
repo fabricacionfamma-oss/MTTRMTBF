@@ -26,7 +26,7 @@ st.markdown("""
 col_title, col_btn = st.columns([4, 1])
 with col_title:
     st.title("⚙️ Análisis de MTBF, MTTR y Down Time")
-    st.write("Indicadores de Confiabilidad y Mantenibilidad con formato matricial (PD Excel).")
+    st.write("Indicadores de Confiabilidad y Mantenibilidad en MINUTOS con formato matricial (PD Excel).")
 with col_btn:
     if st.button("Limpiar Caché", use_container_width=True):
         st.cache_data.clear()
@@ -39,7 +39,7 @@ st.divider()
 # ==========================================
 TARGET_DT_PCT = 5.2       # 5.2% (0.052 en el Excel)
 TARGET_MTTR_MIN = 30      # 30 minutos
-TARGET_MTBF_HS = 500      # 500 horas
+TARGET_MTBF_MIN = 500     # 500 minutos (ajustar si el objetivo real era diferente)
 
 # ==========================================
 # FILTROS
@@ -88,11 +88,17 @@ def fetch_annual_data(anio):
         df_anual = pd.merge(df_meses, df_uptime, on='Mes', how='left')
         df_anual = pd.merge(df_anual, df_fallas, on='Mes', how='left').fillna(0)
         
-        df_anual['Uptime_Hs'] = df_anual['Tiempo_Productivo_Min'] / 60.0
+        # Mantener los cálculos base estrictamente en Minutos
+        df_anual['Uptime_Min'] = df_anual['Tiempo_Productivo_Min']
         df_anual['Downtime_Min'] = df_anual['Tiempo_Reparacion_Min']
         
+        # Cálculos de KPI
         df_anual['DT (%)'] = df_anual.apply(lambda r: (r['Downtime_Min'] / r['Tiempo_Total_Disponible_Min'] * 100) if r['Tiempo_Total_Disponible_Min'] > 0 else 0, axis=1)
-        df_anual['MTBF (Hs)'] = df_anual.apply(lambda r: r['Uptime_Hs'] / r['Cantidad_Fallas'] if r['Cantidad_Fallas'] > 0 else (r['Uptime_Hs'] if r['Uptime_Hs'] > 0 else 0), axis=1)
+        
+        # MTBF en Minutos
+        df_anual['MTBF (Min)'] = df_anual.apply(lambda r: r['Uptime_Min'] / r['Cantidad_Fallas'] if r['Cantidad_Fallas'] > 0 else (r['Uptime_Min'] if r['Uptime_Min'] > 0 else 0), axis=1)
+        
+        # MTTR en Minutos
         df_anual['MTTR (Min)'] = df_anual.apply(lambda r: r['Downtime_Min'] / r['Cantidad_Fallas'] if r['Cantidad_Fallas'] > 0 else 0, axis=1)
         
         return df_anual
@@ -125,17 +131,16 @@ def crear_pdf_pd_excel(df_data, anio):
     pdf = ReportePD(orientation='L', unit='mm', format='A4')
     pdf.add_page()
     
-    # --- FUNCIÓN PARA REPLICAR EL BLOQUE DE EXCEL ---
     def dibujar_bloque_excel(x, y, titulo, objetivo_val, col_real, is_lower_better, is_pct=False):
         pdf.set_xy(x, y)
-        w_lbl = 8    # Ancho columna T/C
-        w_m = 9.5    # Ancho cada mes
-        w_tot = w_lbl + (w_m * 12) # Ancho total de la tabla (122mm)
+        w_lbl = 8    
+        w_m = 9.5    
+        w_tot = w_lbl + (w_m * 12) 
         
-        # 1. FILA DE TÍTULO OSCURO Y ESTADO
+        # 1. FILA DE TÍTULO
         pdf.set_font("Arial", 'B', 8)
         pdf.set_text_color(255, 255, 255)
-        pdf.set_fill_color(31, 78, 121) # Azul oscuro Excel
+        pdf.set_fill_color(31, 78, 121) 
         pdf.set_draw_color(0, 0, 0)
         pdf.set_line_width(0.2)
         pdf.cell(w_tot - 24, 5, " " + titulo, border=1, align='L', fill=True)
@@ -144,15 +149,15 @@ def crear_pdf_pd_excel(df_data, anio):
         pdf.cell(12, 5, "Estado", border=1, align='C', fill=True)
         pdf.cell(12, 5, "Tend.", border=1, align='C', fill=True)
         
-        # 2. FILA DE MESES (E, F, M...)
+        # 2. FILA DE MESES
         pdf.set_xy(x, y + 5)
-        pdf.cell(w_lbl, 5, "", border=0, align='C') # Espacio vacío sobre T/C
-        pdf.set_fill_color(221, 235, 247) # Celeste Excel
+        pdf.cell(w_lbl, 5, "", border=0, align='C') 
+        pdf.set_fill_color(221, 235, 247) 
         meses = ['E', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D']
         for m in meses:
             pdf.cell(w_m, 5, m, border=1, align='C', fill=True)
             
-        # 3. FILA T (TARGET/OBJETIVO)
+        # 3. FILA T (OBJETIVO)
         pdf.set_xy(x, y + 10)
         pdf.set_font("Arial", 'B', 8)
         pdf.cell(w_lbl, 5, "T", border=1, align='C', fill=True)
@@ -162,7 +167,7 @@ def crear_pdf_pd_excel(df_data, anio):
         for _ in range(12):
             pdf.cell(w_m, 5, obj_str, border=1, align='C')
             
-        # 4. FILA C (REAL) CON FORMATO CONDICIONAL
+        # 4. FILA C (REAL)
         pdf.set_xy(x, y + 15)
         pdf.set_font("Arial", 'B', 8)
         pdf.set_fill_color(221, 235, 247)
@@ -174,9 +179,9 @@ def crear_pdf_pd_excel(df_data, anio):
         for i in range(1, 13):
             val = df_data[df_data['Mes'] == i][col_real].values[0]
             if val > 0:
-                val_str = f"{val:.1f}%" if is_pct else f"{val:.0f}" if not is_pct and val > 100 else f"{val:.1f}"
+                # Si no es porcentaje, mostramos sin decimales para los minutos que pueden ser grandes
+                val_str = f"{val:.1f}%" if is_pct else f"{val:.0f}" 
                 
-                # Lógica Verde/Rojo
                 if is_lower_better:
                     if val <= objetivo_val: pdf.set_text_color(33, 195, 84) # Verde
                     else: pdf.set_text_color(220, 20, 20) # Rojo
@@ -185,22 +190,21 @@ def crear_pdf_pd_excel(df_data, anio):
                     else: pdf.set_text_color(220, 20, 20) # Rojo
             else:
                 val_str = "-"
-                pdf.set_text_color(150, 150, 150) # Gris si no hay datos
+                pdf.set_text_color(150, 150, 150) 
                 
             pdf.cell(w_m, 5, val_str, border=1, align='C')
-        pdf.set_text_color(0,0,0) # Resetear color
+        pdf.set_text_color(0,0,0) 
         
         return y + 25
 
-    # Dibujamos los bloques acomodados como en el Excel
     # Bloque 1: Down Time (Izquierda Arriba)
     dibujar_bloque_excel(x=15, y=30, titulo="Down Time Matriceria", objetivo_val=TARGET_DT_PCT, col_real='DT (%)', is_lower_better=True, is_pct=True)
     
     # Bloque 2: MTTR (Derecha Arriba)
-    dibujar_bloque_excel(x=155, y=30, titulo="MTTR - Tiempo medio parada", objetivo_val=TARGET_MTTR_MIN, col_real='MTTR (Min)', is_lower_better=True)
+    dibujar_bloque_excel(x=155, y=30, titulo="MTTR - Tiempo medio parada (Min)", objetivo_val=TARGET_MTTR_MIN, col_real='MTTR (Min)', is_lower_better=True)
     
     # Bloque 3: MTBF (Izquierda Abajo)
-    dibujar_bloque_excel(x=15, y=60, titulo="MTBF - Tiempo medio entre fallas", objetivo_val=TARGET_MTBF_HS, col_real='MTBF (Hs)', is_lower_better=False)
+    dibujar_bloque_excel(x=15, y=60, titulo="MTBF - Tiempo medio entre fallas (Min)", objetivo_val=TARGET_MTBF_MIN, col_real='MTBF (Min)', is_lower_better=False)
 
     # --- GRÁFICO PLOTLY DEBAJO ---
     y_base_grafico = 95
@@ -210,12 +214,12 @@ def crear_pdf_pd_excel(df_data, anio):
         df_plot['Mes_Str'] = df_plot['Mes'].map(meses_map)
         
         fig = go.Figure()
-        fig.add_trace(go.Bar(x=df_plot['Mes_Str'], y=df_plot['MTBF (Hs)'], name="MTBF (Hs)", marker_color='#1f77b4', text=df_plot['MTBF (Hs)'].round(0), textposition='auto'))
+        fig.add_trace(go.Bar(x=df_plot['Mes_Str'], y=df_plot['MTBF (Min)'], name="MTBF (Min)", marker_color='#1f77b4', text=df_plot['MTBF (Min)'].round(0), textposition='auto'))
         fig.add_trace(go.Scatter(x=df_plot['Mes_Str'], y=df_plot['MTTR (Min)'], name="MTTR (Min)", mode='lines+markers', yaxis='y2', line=dict(color='#ff7f0e', width=3), marker=dict(size=8)))
         
         fig.update_layout(
-            title="Evolución Mensual: MTBF vs MTTR",
-            yaxis=dict(title="MTBF (Horas)"),
+            title="Evolución Mensual: MTBF vs MTTR (en Minutos)",
+            yaxis=dict(title="MTBF (Minutos)"),
             yaxis2=dict(title="MTTR (Minutos)", overlaying='y', side='right'),
             legend=dict(x=0.01, y=1.1, orientation="h"),
             margin=dict(l=40, r=40, t=40, b=20),
@@ -238,7 +242,7 @@ if not df_anual.empty:
     meses_map = {1:'Ene', 2:'Feb', 3:'Mar', 4:'Abr', 5:'May', 6:'Jun', 7:'Jul', 8:'Ago', 9:'Sep', 10:'Oct', 11:'Nov', 12:'Dic'}
     df_visual = df_anual.copy()
     df_visual['Mes'] = df_visual['Mes'].map(meses_map)
-    df_visual = df_visual[['Mes', 'Cantidad_Fallas', 'DT (%)', 'MTBF (Hs)', 'MTTR (Min)']].round(2)
+    df_visual = df_visual[['Mes', 'Cantidad_Fallas', 'DT (%)', 'MTBF (Min)', 'MTTR (Min)']].round(2)
     
     col_v1, col_v2 = st.columns([3, 1])
     with col_v1:
@@ -266,14 +270,14 @@ if not df_anual.empty:
         df_chart['Mes_Str'] = df_chart['Mes'].map(meses_map)
         
         fig = go.Figure()
-        fig.add_trace(go.Bar(x=df_chart['Mes_Str'], y=df_chart['MTBF (Hs)'], name="MTBF Real (Hs)", marker_color='#3498DB'))
-        fig.add_trace(go.Scatter(x=df_chart['Mes_Str'], y=[TARGET_MTBF_HS]*len(df_chart), name="Objetivo MTBF", mode='lines', line=dict(color='green', dash='dash')))
+        fig.add_trace(go.Bar(x=df_chart['Mes_Str'], y=df_chart['MTBF (Min)'], name="MTBF Real (Min)", marker_color='#3498DB'))
+        fig.add_trace(go.Scatter(x=df_chart['Mes_Str'], y=[TARGET_MTBF_MIN]*len(df_chart), name="Objetivo MTBF", mode='lines', line=dict(color='green', dash='dash')))
         
         fig.add_trace(go.Scatter(x=df_chart['Mes_Str'], y=df_chart['MTTR (Min)'], name="MTTR Real (Min)", yaxis='y2', mode='lines+markers', line=dict(color='#E74C3C', width=3)))
         fig.add_trace(go.Scatter(x=df_chart['Mes_Str'], y=[TARGET_MTTR_MIN]*len(df_chart), name="Objetivo MTTR", yaxis='y2', mode='lines', line=dict(color='orange', dash='dash')))
 
         fig.update_layout(
-            yaxis=dict(title="MTBF (Horas)"),
+            yaxis=dict(title="MTBF (Minutos)"),
             yaxis2=dict(title="MTTR (Minutos)", overlaying='y', side='right'),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             plot_bgcolor='white', hovermode="x unified"
