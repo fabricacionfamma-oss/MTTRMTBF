@@ -25,8 +25,8 @@ st.markdown("""
 
 col_title, col_btn = st.columns([4, 1])
 with col_title:
-    st.title("⚙️ Análisis de MTBF y MTTR - Matricería")
-    st.write("Indicadores de Confiabilidad y Mantenibilidad con seguimiento Mensual (Formato PD).")
+    st.title("⚙️ Análisis de MTBF, MTTR y Down Time")
+    st.write("Indicadores de Confiabilidad y Mantenibilidad con formato matricial (PD Excel).")
 with col_btn:
     if st.button("Limpiar Caché", use_container_width=True):
         st.cache_data.clear()
@@ -37,7 +37,8 @@ st.divider()
 # ==========================================
 # OBJETIVOS (TARGETS) SEGÚN EXCEL PD
 # ==========================================
-TARGET_MTTR_MIN = 30      # 30 minutos (0.5 hs)
+TARGET_DT_PCT = 5.2       # 5.2% (0.052 en el Excel)
+TARGET_MTTR_MIN = 30      # 30 minutos
 TARGET_MTBF_HS = 500      # 500 horas
 
 # ==========================================
@@ -54,10 +55,10 @@ def fetch_annual_data(anio):
     try:
         conn = st.connection("wii_bi", type="sql")
         
-        # 1. Uptime Agrupado por Mes
         q_uptime = f"""
             SELECT MONTH(p.Date) as Mes, 
-                   SUM(p.ProductiveTime) as Tiempo_Productivo_Min
+                   SUM(p.ProductiveTime) as Tiempo_Productivo_Min,
+                   SUM(p.ProductiveTime + p.DownTime) as Tiempo_Total_Disponible_Min
             FROM PROD_D_03 p
             JOIN CELL c ON p.CellId = c.CellId
             WHERE YEAR(p.Date) = {anio}
@@ -65,7 +66,6 @@ def fetch_annual_data(anio):
         """
         df_uptime = conn.query(q_uptime)
         
-        # 2. Fallas Matricería Agrupadas por Mes
         q_fallas = f"""
             SELECT MONTH(e.Date) as Mes, 
                    COUNT(e.Id) as Cantidad_Fallas,
@@ -84,26 +84,16 @@ def fetch_annual_data(anio):
         """
         df_fallas = conn.query(q_fallas)
         
-        # Generar estructura de 12 meses
         df_meses = pd.DataFrame({'Mes': range(1, 13)})
-        
-        # Unir datos
         df_anual = pd.merge(df_meses, df_uptime, on='Mes', how='left')
         df_anual = pd.merge(df_anual, df_fallas, on='Mes', how='left').fillna(0)
         
-        # Cálculos en Horas
         df_anual['Uptime_Hs'] = df_anual['Tiempo_Productivo_Min'] / 60.0
-        df_anual['Downtime_Hs'] = df_anual['Tiempo_Reparacion_Min'] / 60.0
         df_anual['Downtime_Min'] = df_anual['Tiempo_Reparacion_Min']
         
-        df_anual['MTBF (Hs)'] = df_anual.apply(
-            lambda r: r['Uptime_Hs'] / r['Cantidad_Fallas'] if r['Cantidad_Fallas'] > 0 else (r['Uptime_Hs'] if r['Uptime_Hs'] > 0 else 0), axis=1
-        )
-        
-        # Calculamos MTTR en Minutos para que coincida con el objetivo del Excel (30 min)
-        df_anual['MTTR (Min)'] = df_anual.apply(
-            lambda r: r['Downtime_Min'] / r['Cantidad_Fallas'] if r['Cantidad_Fallas'] > 0 else 0, axis=1
-        )
+        df_anual['DT (%)'] = df_anual.apply(lambda r: (r['Downtime_Min'] / r['Tiempo_Total_Disponible_Min'] * 100) if r['Tiempo_Total_Disponible_Min'] > 0 else 0, axis=1)
+        df_anual['MTBF (Hs)'] = df_anual.apply(lambda r: r['Uptime_Hs'] / r['Cantidad_Fallas'] if r['Cantidad_Fallas'] > 0 else (r['Uptime_Hs'] if r['Uptime_Hs'] > 0 else 0), axis=1)
+        df_anual['MTTR (Min)'] = df_anual.apply(lambda r: r['Downtime_Min'] / r['Cantidad_Fallas'] if r['Cantidad_Fallas'] > 0 else 0, axis=1)
         
         return df_anual
     except Exception as e:
@@ -113,16 +103,16 @@ def fetch_annual_data(anio):
 df_anual = fetch_annual_data(anio_sel)
 
 # ==========================================
-# GENERADOR PDF (FORMATO PESTAÑA 'PD')
+# GENERADOR PDF (FORMATO ESTILO EXCEL PD)
 # ==========================================
 class ReportePD(FPDF):
     def header(self):
         self.set_font("Arial", 'B', 14)
         self.set_text_color(15, 76, 129)
-        self.cell(0, 10, f"Reporte de Indicadores de Mantenimiento Matrices (PD) - Año {anio_sel}", ln=True, align='C')
+        self.cell(0, 10, f"Reporte de Indicadores de Mantenimiento Matrices (Formato PD) - Año {anio_sel}", ln=True, align='C')
         self.set_draw_color(15, 76, 129)
         self.set_line_width(0.5)
-        self.line(10, self.get_y(), 287, self.get_y()) # Landscape format
+        self.line(10, self.get_y(), 287, self.get_y())
         self.ln(5)
 
     def footer(self):
@@ -131,111 +121,110 @@ class ReportePD(FPDF):
         self.set_text_color(128)
         self.cell(0, 10, f"Página {self.page_no()}", 0, 0, "C")
 
-def crear_pdf_pd(df_data, anio):
-    # Crear PDF apaisado (Landscape) para que entren los 12 meses cómodamente
+def crear_pdf_pd_excel(df_data, anio):
     pdf = ReportePD(orientation='L', unit='mm', format='A4')
     pdf.add_page()
     
-    meses_nombres = ['E', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D']
-    
-    # --- FUNCION PARA DIBUJAR UNA TABLA DE INDICADOR (ESTILO EXCEL) ---
-    def dibujar_tabla_indicador(titulo, objetivo_val, col_real, is_mtbf=True):
-        pdf.set_font("Arial", 'B', 10)
-        pdf.set_text_color(50, 50, 50)
-        pdf.cell(0, 8, titulo, ln=True)
+    # --- FUNCIÓN PARA REPLICAR EL BLOQUE DE EXCEL ---
+    def dibujar_bloque_excel(x, y, titulo, objetivo_val, col_real, is_lower_better, is_pct=False):
+        pdf.set_xy(x, y)
+        w_lbl = 8    # Ancho columna T/C
+        w_m = 9.5    # Ancho cada mes
+        w_tot = w_lbl + (w_m * 12) # Ancho total de la tabla (122mm)
         
-        # Configuraciones de celda
-        w_indicador = 45
-        w_tipo = 20
-        w_mes = 16
-        w_estado = 25
-        h_cell = 6
-        
-        # CABECERAS MESES
+        # 1. FILA DE TÍTULO OSCURO Y ESTADO
         pdf.set_font("Arial", 'B', 8)
-        pdf.set_fill_color(220, 230, 241) # Azul clarito Excel
-        pdf.cell(w_indicador, h_cell, "Indicador", border=1, align='C', fill=True)
-        pdf.cell(w_tipo, h_cell, "Tipo", border=1, align='C', fill=True)
-        for m in meses_nombres:
-            pdf.cell(w_mes, h_cell, m, border=1, align='C', fill=True)
-        pdf.cell(w_estado, h_cell, "Promedio", border=1, align='C', fill=True, ln=True)
+        pdf.set_text_color(255, 255, 255)
+        pdf.set_fill_color(31, 78, 121) # Azul oscuro Excel
+        pdf.set_draw_color(0, 0, 0)
+        pdf.set_line_width(0.2)
+        pdf.cell(w_tot - 24, 5, " " + titulo, border=1, align='L', fill=True)
+        pdf.set_fill_color(189, 195, 199)
+        pdf.set_text_color(0, 0, 0)
+        pdf.cell(12, 5, "Estado", border=1, align='C', fill=True)
+        pdf.cell(12, 5, "Tend.", border=1, align='C', fill=True)
         
-        # FILA OBJETIVO (T)
-        pdf.set_font("Arial", '', 8)
+        # 2. FILA DE MESES (E, F, M...)
+        pdf.set_xy(x, y + 5)
+        pdf.cell(w_lbl, 5, "", border=0, align='C') # Espacio vacío sobre T/C
+        pdf.set_fill_color(221, 235, 247) # Celeste Excel
+        meses = ['E', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D']
+        for m in meses:
+            pdf.cell(w_m, 5, m, border=1, align='C', fill=True)
+            
+        # 3. FILA T (TARGET/OBJETIVO)
+        pdf.set_xy(x, y + 10)
+        pdf.set_font("Arial", 'B', 8)
+        pdf.cell(w_lbl, 5, "T", border=1, align='C', fill=True)
+        pdf.set_font("Arial", '', 7)
         pdf.set_fill_color(255, 255, 255)
-        pdf.cell(w_indicador, h_cell, "Matricería / Herramental", border=1, align='L')
-        pdf.cell(w_tipo, h_cell, "Objetivo (T)", border=1, align='C')
+        obj_str = f"{objetivo_val}%" if is_pct else f"{objetivo_val}"
         for _ in range(12):
-            pdf.cell(w_mes, h_cell, f"{objetivo_val}", border=1, align='C')
-        pdf.cell(w_estado, h_cell, f"{objetivo_val}", border=1, align='C', ln=True)
-        
-        # FILA REAL (C)
-        pdf.cell(w_indicador, h_cell, "Valores Registrados", border=1, align='L')
-        pdf.cell(w_tipo, h_cell, "Real (C)", border=1, align='C')
-        
-        suma_real = 0
-        meses_activos = 0
+            pdf.cell(w_m, 5, obj_str, border=1, align='C')
+            
+        # 4. FILA C (REAL) CON FORMATO CONDICIONAL
+        pdf.set_xy(x, y + 15)
+        pdf.set_font("Arial", 'B', 8)
+        pdf.set_fill_color(221, 235, 247)
+        pdf.set_text_color(0,0,0)
+        pdf.cell(w_lbl, 5, "C", border=1, align='C', fill=True)
+        pdf.set_font("Arial", 'B', 7)
+        pdf.set_fill_color(255, 255, 255)
         
         for i in range(1, 13):
-            val_real = df_data[df_data['Mes'] == i][col_real].values[0]
-            if val_real > 0:
-                suma_real += val_real
-                meses_activos += 1
+            val = df_data[df_data['Mes'] == i][col_real].values[0]
+            if val > 0:
+                val_str = f"{val:.1f}%" if is_pct else f"{val:.0f}" if not is_pct and val > 100 else f"{val:.1f}"
                 
-            val_str = f"{val_real:.1f}" if val_real > 0 else "-"
-            
-            # Formato Condicional de Color (K = Verde, L = Rojo)
-            if val_real > 0:
-                if is_mtbf:
-                    if val_real >= objetivo_val: pdf.set_text_color(33, 195, 84) # Verde
+                # Lógica Verde/Rojo
+                if is_lower_better:
+                    if val <= objetivo_val: pdf.set_text_color(33, 195, 84) # Verde
                     else: pdf.set_text_color(220, 20, 20) # Rojo
                 else:
-                    if val_real <= objetivo_val: pdf.set_text_color(33, 195, 84) # Verde
+                    if val >= objetivo_val: pdf.set_text_color(33, 195, 84) # Verde
                     else: pdf.set_text_color(220, 20, 20) # Rojo
             else:
-                pdf.set_text_color(50, 50, 50)
+                val_str = "-"
+                pdf.set_text_color(150, 150, 150) # Gris si no hay datos
                 
-            pdf.cell(w_mes, h_cell, val_str, border=1, align='C')
-            pdf.set_text_color(50, 50, 50) # Reset
+            pdf.cell(w_m, 5, val_str, border=1, align='C')
+        pdf.set_text_color(0,0,0) # Resetear color
         
-        # Promedio Anual
-        promedio = suma_real / meses_activos if meses_activos > 0 else 0
-        pdf.set_font("Arial", 'B', 8)
-        pdf.cell(w_estado, h_cell, f"{promedio:.1f}", border=1, align='C', ln=True)
-        pdf.ln(5)
+        return y + 25
 
-    # 1. TABLA MTBF
-    dibujar_tabla_indicador(f"MTBF - Tiempo Medio Entre Fallas MATRICERIA (Objetivo: {TARGET_MTBF_HS} Hs)", TARGET_MTBF_HS, 'MTBF (Hs)', is_mtbf=True)
+    # Dibujamos los bloques acomodados como en el Excel
+    # Bloque 1: Down Time (Izquierda Arriba)
+    dibujar_bloque_excel(x=15, y=30, titulo="Down Time Matriceria", objetivo_val=TARGET_DT_PCT, col_real='DT (%)', is_lower_better=True, is_pct=True)
     
-    # 2. TABLA MTTR
-    dibujar_tabla_indicador(f"MTTR - Tiempo Medio de Parada MATRICERIA (Objetivo: {TARGET_MTTR_MIN} Min)", TARGET_MTTR_MIN, 'MTTR (Min)', is_mtbf=False)
+    # Bloque 2: MTTR (Derecha Arriba)
+    dibujar_bloque_excel(x=155, y=30, titulo="MTTR - Tiempo medio parada", objetivo_val=TARGET_MTTR_MIN, col_real='MTTR (Min)', is_lower_better=True)
+    
+    # Bloque 3: MTBF (Izquierda Abajo)
+    dibujar_bloque_excel(x=15, y=60, titulo="MTBF - Tiempo medio entre fallas", objetivo_val=TARGET_MTBF_HS, col_real='MTBF (Hs)', is_lower_better=False)
 
-    # --- GRAFICOS PLOTLY AL PDF ---
-    pdf.ln(5)
-    y_base = pdf.get_y()
-    
-    # Grafico Evolución Mensual
-    df_plot = df_data[df_data['Uptime_Hs'] > 0].copy()
+    # --- GRÁFICO PLOTLY DEBAJO ---
+    y_base_grafico = 95
+    df_plot = df_data[df_data['Tiempo_Total_Disponible_Min'] > 0].copy()
     if not df_plot.empty:
-        meses_map = {1:'Ene', 2:'Feb', 3:'Mar', 4:'Abr', 5:'May', 6:'Jun', 7:'Jul', 8:'Ago', 9:'Sep', 10:'Oct', 11:'Nov', 12:'Dic'}
+        meses_map = {1:'E', 2:'F', 3:'M', 4:'A', 5:'M', 6:'J', 7:'J', 8:'A', 9:'S', 10:'O', 11:'N', 12:'D'}
         df_plot['Mes_Str'] = df_plot['Mes'].map(meses_map)
         
         fig = go.Figure()
-        fig.add_trace(go.Bar(x=df_plot['Mes_Str'], y=df_plot['MTBF (Hs)'], name="MTBF (Hs)", marker_color='#1f77b4', text=df_plot['MTBF (Hs)'].round(1), textposition='auto'))
+        fig.add_trace(go.Bar(x=df_plot['Mes_Str'], y=df_plot['MTBF (Hs)'], name="MTBF (Hs)", marker_color='#1f77b4', text=df_plot['MTBF (Hs)'].round(0), textposition='auto'))
         fig.add_trace(go.Scatter(x=df_plot['Mes_Str'], y=df_plot['MTTR (Min)'], name="MTTR (Min)", mode='lines+markers', yaxis='y2', line=dict(color='#ff7f0e', width=3), marker=dict(size=8)))
         
         fig.update_layout(
-            title="Evolución Mensual MTBF vs MTTR",
+            title="Evolución Mensual: MTBF vs MTTR",
             yaxis=dict(title="MTBF (Horas)"),
             yaxis2=dict(title="MTTR (Minutos)", overlaying='y', side='right'),
-            legend=dict(x=0.01, y=0.99),
-            margin=dict(l=40, r=40, t=40, b=30),
-            height=300, width=900, plot_bgcolor='rgba(0,0,0,0)'
+            legend=dict(x=0.01, y=1.1, orientation="h"),
+            margin=dict(l=40, r=40, t=40, b=20),
+            height=300, width=950, plot_bgcolor='rgba(0,0,0,0)'
         )
         
         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_chart:
             fig.write_image(tmp_chart.name, engine="kaleido")
-            pdf.image(tmp_chart.name, x=10, y=y_base, w=270)
+            pdf.image(tmp_chart.name, x=15, y=y_base_grafico, w=260)
             os.remove(tmp_chart.name)
 
     return pdf.output(dest='S').encode('latin-1')
@@ -249,17 +238,16 @@ if not df_anual.empty:
     meses_map = {1:'Ene', 2:'Feb', 3:'Mar', 4:'Abr', 5:'May', 6:'Jun', 7:'Jul', 8:'Ago', 9:'Sep', 10:'Oct', 11:'Nov', 12:'Dic'}
     df_visual = df_anual.copy()
     df_visual['Mes'] = df_visual['Mes'].map(meses_map)
-    df_visual = df_visual[['Mes', 'Cantidad_Fallas', 'Uptime_Hs', 'Downtime_Min', 'MTBF (Hs)', 'MTTR (Min)']].round(2)
+    df_visual = df_visual[['Mes', 'Cantidad_Fallas', 'DT (%)', 'MTBF (Hs)', 'MTTR (Min)']].round(2)
     
-    # Botón de Descarga PDF
     col_v1, col_v2 = st.columns([3, 1])
     with col_v1:
-        st.dataframe(df_visual.set_index('Mes').T, use_container_width=True) # Mostrar tabla transpuesta estilo Excel
+        df_show = df_visual.set_index('Mes').T
+        st.dataframe(df_show, use_container_width=True) 
     with col_v2:
         st.write("📥 **Exportar Documento PD**")
-        st.info("Descarga el reporte en formato tabla mensual con comparativa Objetivo vs Real.")
         try:
-            pdf_bytes = crear_pdf_pd(df_anual, anio_sel)
+            pdf_bytes = crear_pdf_pd_excel(df_anual, anio_sel)
             st.download_button(
                 label="📄 Descargar PDF (Formato PD)",
                 data=pdf_bytes,
@@ -272,9 +260,8 @@ if not df_anual.empty:
             
     st.divider()
     
-    # Gráfico interactivo en Streamlit
     st.subheader("Tendencia Anual de Confiabilidad")
-    df_chart = df_anual[df_anual['Uptime_Hs'] > 0].copy()
+    df_chart = df_anual[df_anual['Tiempo_Total_Disponible_Min'] > 0].copy()
     if not df_chart.empty:
         df_chart['Mes_Str'] = df_chart['Mes'].map(meses_map)
         
