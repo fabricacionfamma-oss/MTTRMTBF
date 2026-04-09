@@ -49,7 +49,6 @@ TARGET_MTBF_C = 500
 st.markdown('<div class="filter-box">', unsafe_allow_html=True)
 st.subheader("🔍 Filtros del Reporte")
 
-# Selectores en una sola fila (AQUÍ ESTÁ EL CAMBIO VISUAL)
 col_f1, col_f2 = st.columns([1, 3])
 
 with col_f1:
@@ -145,7 +144,7 @@ def fetch_annual_data(anio):
 df_anual = fetch_annual_data(anio_sel)
 
 # ==========================================
-# GENERADOR PDF DINÁMICO (Sin mostrar gráficos en web)
+# GENERADOR PDF DINÁMICO
 # ==========================================
 class ReportePD(FPDF):
     def header(self):
@@ -171,7 +170,9 @@ def crear_pdf_pd_excel(df_data, anio, meses_filtrados):
 
     def generar_grafico_tendencia_pdf(df, col_real, obj_t, obj_c, is_pct):
         df_plot = df[df['Mes'].isin(meses_filtrados)].copy()
-        df_plot['Eje_X'] = df_plot['Mes'].astype(str)
+        
+        # 🟢 CORRECCIÓN: Usar una secuencia numérica estricta para alinear con FPDF
+        df_plot['Eje_X'] = list(range(num_meses)) 
         
         fig = go.Figure()
         text_format = [f"{v:.1f}%" if is_pct else f"{v:.0f}" for v in df_plot[col_real]]
@@ -193,10 +194,12 @@ def crear_pdf_pd_excel(df_data, anio, meses_filtrados):
         
         fig.update_layout(
             yaxis=dict(title=dict(text=y_title, font=dict(size=9)), tickfont=dict(size=8)),
+            # 🟢 CORRECCIÓN: Rango matemático exacto basado en la longitud numérica
             xaxis=dict(showticklabels=False, showgrid=False, zeroline=False, range=[-0.5, num_meses - 0.5]),
-            margin=dict(l=50, r=0, t=25, b=0, autoexpand=False), 
+            # 🟢 CORRECCIÓN: pad=0 asegura que no haya píxeles extra arruinando la alineación
+            margin=dict(l=50, r=0, t=25, b=0, pad=0, autoexpand=False), 
             height=175, width=590, 
-            bargap=0.2,
+            bargap=0.15,
             showlegend=True,
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=9)),
             plot_bgcolor='white'
