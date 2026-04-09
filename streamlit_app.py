@@ -26,7 +26,7 @@ st.markdown("""
 col_title, col_btn = st.columns([4, 1])
 with col_title:
     st.title("⚙️ Análisis de MTBF, MTTR y Down Time")
-    st.write("Dashboard con Gráficos y Tablas Matriciales (T = Límite Sup, C = Límite Inf, A = Real Mensual).")
+    st.write("Dashboard dinámico (Selecciona los meses para generar el reporte).")
 with col_btn:
     if st.button("Limpiar Caché", use_container_width=True):
         st.cache_data.clear()
@@ -37,35 +37,42 @@ st.divider()
 # ==========================================
 # OBJETIVOS (TARGETS T y C)
 # ==========================================
-TARGET_DT_T = 5.2       
-TARGET_DT_C = 3.0       
+TARGET_DT_T = 5.2       # Límite Superior Down Time
+TARGET_DT_C = 3.0       # Límite Inferior Down Time
 
-TARGET_MTTR_T = 30      
-TARGET_MTTR_C = 20      
+TARGET_MTTR_T = 30      # Límite Superior MTTR
+TARGET_MTTR_C = 20      # Límite Inferior MTTR
 
-TARGET_MTBF_T = 600     
-TARGET_MTBF_C = 500     
+TARGET_MTBF_T = 600     # Límite Superior MTBF
+TARGET_MTBF_C = 500     # Límite Inferior MTBF
 
 # ==========================================
-# FILTROS
+# FILTROS DINÁMICOS
 # ==========================================
 col_f1, col_f2 = st.columns(2)
 
 with col_f1:
     anio_actual = pd.to_datetime("today").year
-    anio_sel = st.selectbox("Seleccione el Año:", range(2023, anio_actual + 2), index=anio_actual-2023)
+    anio_sel = st.selectbox("Seleccione el Año para el Análisis y Reporte:", range(2023, anio_actual + 2), index=anio_actual-2023)
 
 with col_f2:
-    meses_ui = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
-    # Por defecto, selecciona hasta el mes actual si es el año en curso
+    meses_nombres = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic']
+    
+    # Preselecciona automáticamente los meses transcurridos si es el año en curso
     if anio_sel == anio_actual:
         mes_actual = pd.to_datetime("today").month
-        default_meses = meses_ui[:mes_actual]
+        default_meses = meses_nombres[:mes_actual]
     else:
-        default_meses = meses_ui
+        default_meses = meses_nombres
         
-    meses_sel = st.multiselect("Seleccione los Meses a mostrar en Gráficos:", meses_ui, default=default_meses)
-    meses_activos = [meses_ui.index(m) + 1 for m in meses_sel]
+    meses_sel = st.multiselect("Seleccione los Meses a mostrar en los Cuadros y Gráficos:", meses_nombres, default=default_meses)
+    
+if not meses_sel:
+    st.warning("⚠️ Por favor, seleccione al menos un mes para generar el reporte.")
+    st.stop()
+
+# Convertir los nombres a sus números (1 al 12)
+meses_activos = [meses_nombres.index(m) + 1 for m in meses_sel]
 
 # ==========================================
 # EXTRACCIÓN Y PROCESAMIENTO DE DATOS
@@ -132,7 +139,7 @@ def fetch_annual_data(anio):
 df_anual = fetch_annual_data(anio_sel)
 
 # ==========================================
-# GENERADOR PDF (SINCROMIZACIÓN MATEMÁTICA)
+# GENERADOR PDF (DINÁMICO SEGÚN MESES)
 # ==========================================
 class ReportePD(FPDF):
     def header(self):
@@ -153,44 +160,37 @@ class ReportePD(FPDF):
 def crear_pdf_pd_excel(df_data, anio, meses_filtrados):
     pdf = ReportePD(orientation='L', unit='mm', format='A4')
     pdf.add_page()
-    meses_nombres = ['E', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D']
+    meses_letras = ['E', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D']
+    num_meses = len(meses_filtrados)
 
     def generar_grafico_tendencia_pdf(df, col_real, obj_t, obj_c, is_pct):
-        df_plot = df.copy()
-        df_plot['Mes_Str'] = df_plot['Mes'].map(dict(zip(range(1, 13), meses_nombres)))
+        df_plot = df[df['Mes'].isin(meses_filtrados)].copy()
         
-        # Filtramos para graficar solo los meses seleccionados y con datos productivos
-        df_plot['Valor_Plot'] = df_plot.apply(
-            lambda r: r[col_real] if (r['Mes'] in meses_filtrados and r['Tiempo_Total_Disponible_Min'] > 0) else None, 
-            axis=1
-        )
+        # Eje X numérico pero como string para evitar que Plotly mezcle meses con la misma letra (ej: Marzo y Mayo)
+        df_plot['Eje_X'] = df_plot['Mes'].astype(str)
         
         fig = go.Figure()
-        text_format = []
-        for v in df_plot['Valor_Plot']:
-            if pd.isna(v): text_format.append("")
-            else: text_format.append(f"{v:.1f}%" if is_pct else f"{v:.0f}")
+        text_format = [f"{v:.1f}%" if is_pct else f"{v:.0f}" for v in df_plot[col_real]]
         
         fig.add_trace(go.Bar(
-            x=df_plot['Mes_Str'], y=df_plot['Valor_Plot'], name="Real (A)",
+            x=df_plot['Eje_X'], y=df_plot[col_real], name="Real (A)",
             marker_color='#1f77b4', text=text_format, textposition='auto', textfont=dict(size=12)
         ))
-        
         fig.add_trace(go.Scatter(
-            x=df_plot['Mes_Str'], y=[obj_t] * 12, name="Sup. (T)",
+            x=df_plot['Eje_X'], y=[obj_t] * num_meses, name="Sup. (T)",
             mode='lines', line=dict(color='red', dash='dash', width=2)
         ))
-        
         fig.add_trace(go.Scatter(
-            x=df_plot['Mes_Str'], y=[obj_c] * 12, name="Inf. (C)",
+            x=df_plot['Eje_X'], y=[obj_c] * num_meses, name="Inf. (C)",
             mode='lines', line=dict(color='orange', dash='dot', width=2)
         ))
         
         y_title = "Porcentaje (%)" if is_pct else "Minutos"
         
+        # ALINEACIÓN MILIMÉTRICA: margin l=50px equivale al ancho de la celda de T/C/A en el PDF (10mm * 5 = 50px).
         fig.update_layout(
             yaxis=dict(title=dict(text=y_title, font=dict(size=9)), tickfont=dict(size=8)),
-            xaxis=dict(showticklabels=False, showgrid=False, zeroline=False, range=[-0.5, 11.5]),
+            xaxis=dict(showticklabels=False, showgrid=False, zeroline=False, range=[-0.5, num_meses - 0.5]),
             margin=dict(l=50, r=0, t=25, b=0, autoexpand=False), 
             height=175, width=590, 
             bargap=0.2,
@@ -205,9 +205,10 @@ def crear_pdf_pd_excel(df_data, anio, meses_filtrados):
         return tmp_chart.name
 
     def dibujar_bloque_completo(x, y, titulo, obj_t, obj_c, col_real, col_acum, is_lower_better, is_pct=False):
+        # El bloque siempre medirá 118mm en total. Si seleccionas menos meses, las columnas se hacen más anchas.
         w_lbl = 10     
-        w_m = 9.0      
-        w_tot = w_lbl + (w_m * 12) 
+        w_tot = 118 
+        w_m = (w_tot - w_lbl) / num_meses 
         
         pdf.set_xy(x, y)
         pdf.set_font("Arial", 'B', 8)
@@ -223,8 +224,9 @@ def crear_pdf_pd_excel(df_data, anio, meses_filtrados):
         pdf.set_xy(x, y_tabla)
         pdf.set_fill_color(221, 235, 247); pdf.set_text_color(0,0,0)
         pdf.cell(w_lbl, 5, "", border=0, align='C', fill=False) 
-        for m in meses_nombres: 
-            pdf.cell(w_m, 5, m, border=1, align='C', fill=True)
+        for i in meses_filtrados: 
+            m_letra = meses_letras[i-1]
+            pdf.cell(w_m, 5, m_letra, border=1, align='C', fill=True)
             
         pdf.set_xy(x, y_tabla + 5)
         pdf.set_font("Arial", 'B', 8)
@@ -232,7 +234,7 @@ def crear_pdf_pd_excel(df_data, anio, meses_filtrados):
         pdf.cell(w_lbl, 5, "T", border=1, align='C', fill=True)
         pdf.set_font("Arial", '', 7)
         t_str = f"{obj_t}%" if is_pct else f"{obj_t}"
-        for _ in range(12): 
+        for _ in meses_filtrados: 
             pdf.cell(w_m, 5, t_str, border=1, align='C', fill=True) 
             
         pdf.set_xy(x, y_tabla + 10)
@@ -241,7 +243,7 @@ def crear_pdf_pd_excel(df_data, anio, meses_filtrados):
         pdf.cell(w_lbl, 5, "C", border=1, align='C', fill=True)
         pdf.set_font("Arial", '', 7)
         c_str = f"{obj_c}%" if is_pct else f"{obj_c}"
-        for _ in range(12): 
+        for _ in meses_filtrados: 
             pdf.cell(w_m, 5, c_str, border=1, align='C', fill=True)
             
         pdf.set_xy(x, y_tabla + 15)
@@ -250,7 +252,7 @@ def crear_pdf_pd_excel(df_data, anio, meses_filtrados):
         pdf.cell(w_lbl, 5, "A", border=1, align='C', fill=True)
         pdf.set_font("Arial", 'B', 7)
         
-        for i in range(1, 13):
+        for i in meses_filtrados:
             val_a = df_data[df_data['Mes'] == i][col_real].values[0]
             if df_data[df_data['Mes'] == i]['Tiempo_Total_Disponible_Min'].values[0] > 0:
                 val_str = f"{val_a:.1f}%" if is_pct else f"{val_a:.0f}" 
@@ -279,34 +281,27 @@ def crear_pdf_pd_excel(df_data, anio, meses_filtrados):
 # VISUALIZACIÓN DASHBOARD EN WEB Y DESCARGA
 # ==========================================
 if not df_anual.empty:
+    
+    # Preparamos los datos filtrados por la selección del usuario para la web
+    df_visual = df_anual[df_anual['Mes'].isin(meses_activos)].copy()
+    df_visual['Mes_Nombre'] = df_visual['Mes'].apply(lambda x: meses_nombres[x-1])
+    
     st.subheader(f"📊 Dashboard Mantenimiento Matrices - Año {anio_sel}")
     
-    def renderizar_grafico_web(df, col_real, obj_t, obj_c, titulo, is_pct, meses_filtrados):
-        meses_nombres = ['E', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D']
-        df_plot = df.copy()
-        df_plot['Mes_Str'] = df_plot['Mes'].map(dict(zip(range(1, 13), meses_nombres)))
-        
-        df_plot['Valor_Plot'] = df_plot.apply(
-            lambda r: r[col_real] if (r['Mes'] in meses_filtrados and r['Tiempo_Total_Disponible_Min'] > 0) else None, 
-            axis=1
-        )
-        
+    def renderizar_grafico_web(df_vis, col_real, obj_t, obj_c, titulo, is_pct):
         fig = go.Figure()
-        text_format = []
-        for v in df_plot['Valor_Plot']:
-            if pd.isna(v): text_format.append("")
-            else: text_format.append(f"{v:.1f}%" if is_pct else f"{v:.0f}")
+        text_format = [f"{v:.1f}%" if is_pct else f"{v:.0f}" for v in df_vis[col_real]]
         
         fig.add_trace(go.Bar(
-            x=df_plot['Mes_Str'], y=df_plot['Valor_Plot'], name="Real (A)",
+            x=df_vis['Mes_Nombre'], y=df_vis[col_real], name="Real (A)",
             marker_color='#3498DB', text=text_format, textposition='auto', textfont=dict(size=12)
         ))
         fig.add_trace(go.Scatter(
-            x=df_plot['Mes_Str'], y=[obj_t] * 12, name="Sup. (T)",
+            x=df_vis['Mes_Nombre'], y=[obj_t] * len(df_vis), name="Sup. (T)",
             mode='lines', line=dict(color='red', dash='dash', width=2)
         ))
         fig.add_trace(go.Scatter(
-            x=df_plot['Mes_Str'], y=[obj_c] * 12, name="Inf. (C)",
+            x=df_vis['Mes_Nombre'], y=[obj_c] * len(df_vis), name="Inf. (C)",
             mode='lines', line=dict(color='orange', dash='dot', width=2)
         ))
         
@@ -315,23 +310,30 @@ if not df_anual.empty:
             margin=dict(l=20, r=20, t=40, b=20), height=250,
             showlegend=True, legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
             plot_bgcolor='rgba(0,0,0,0)',
-            xaxis=dict(range=[-0.5, 11.5]) # Fija los 12 meses siempre, aunque estén vacíos
+            xaxis=dict(range=[-0.5, len(df_vis) - 0.5]) # Ajusta el grid al total de meses
         )
         fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='LightGray')
         return fig
 
+    # --- Cuadros (Tablas) en la Web filtradas ---
+    df_show = df_visual[['Mes_Nombre', 'DT (%)', 'MTTR (Min)', 'MTBF (Min)']].set_index('Mes_Nombre').T.round(2)
+    st.dataframe(df_show, use_container_width=True)
+    
+    # --- Gráficos en la Web filtrados ---
     c1, c2 = st.columns(2)
     with c1:
-        st.plotly_chart(renderizar_grafico_web(df_anual, 'DT (%)', TARGET_DT_T, TARGET_DT_C, "Down Time Matricería", True, meses_activos), use_container_width=True)
+        st.plotly_chart(renderizar_grafico_web(df_visual, 'DT (%)', TARGET_DT_T, TARGET_DT_C, "Down Time Matricería", True), use_container_width=True)
     with c2:
-        st.plotly_chart(renderizar_grafico_web(df_anual, 'MTTR (Min)', TARGET_MTTR_T, TARGET_MTTR_C, "MTTR (Min)", False, meses_activos), use_container_width=True)
+        st.plotly_chart(renderizar_grafico_web(df_visual, 'MTTR (Min)', TARGET_MTTR_T, TARGET_MTTR_C, "MTTR (Min)", False), use_container_width=True)
     
     c3, _ = st.columns(2)
     with c3:
-        st.plotly_chart(renderizar_grafico_web(df_anual, 'MTBF (Min)', TARGET_MTBF_T, TARGET_MTBF_C, "MTBF (Min)", False, meses_activos), use_container_width=True)
+        st.plotly_chart(renderizar_grafico_web(df_visual, 'MTBF (Min)', TARGET_MTBF_T, TARGET_MTBF_C, "MTBF (Min)", False), use_container_width=True)
     
     st.divider()
-    st.write("📥 **Exportar Documento PD (Formato Excel T, C, A)**")
+    st.write("📥 **Exportar Documento PD Dinámico**")
+    st.info("El PDF generado reflejará exactamente los meses que hayas seleccionado arriba, ajustando el ancho de las columnas a la perfección.")
+    
     try:
         pdf_bytes = crear_pdf_pd_excel(df_anual, anio_sel, meses_activos)
         st.download_button(
