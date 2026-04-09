@@ -1,0 +1,7 @@
+streamlit
+pandas
+plotly
+fpdf
+kaleido==0.1.0.post1
+SQLAlchemy
+pyodbc
