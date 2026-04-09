@@ -49,7 +49,7 @@ TARGET_MTBF_C = 500
 st.markdown('<div class="filter-box">', unsafe_allow_html=True)
 st.subheader("🔍 Filtros del Reporte")
 
-# Selectores en una sola fila
+# Selectores en una sola fila (AQUÍ ESTÁ EL CAMBIO VISUAL)
 col_f1, col_f2 = st.columns([1, 3])
 
 with col_f1:
@@ -145,7 +145,7 @@ def fetch_annual_data(anio):
 df_anual = fetch_annual_data(anio_sel)
 
 # ==========================================
-# GENERADOR PDF DINÁMICO (Los gráficos de Plotly solo se usan aquí para el PDF)
+# GENERADOR PDF DINÁMICO (Sin mostrar gráficos en web)
 # ==========================================
 class ReportePD(FPDF):
     def header(self):
@@ -280,7 +280,7 @@ def crear_pdf_pd_excel(df_data, anio, meses_filtrados):
     return pdf.output(dest='S').encode('latin-1')
 
 # ==========================================
-# SECCIÓN DE DESCARGA (SIN GRÁFICOS WEB)
+# SECCIÓN DE DESCARGA
 # ==========================================
 if not df_anual.empty:
     st.write("📥 **Generar Reporte**")
