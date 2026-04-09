@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import plotly.express as px
 import plotly.graph_objects as go
 from fpdf import FPDF
 import tempfile
@@ -126,21 +127,17 @@ def crear_pdf_pd_excel(df_data, anio):
     
     meses_nombres = ['E', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D']
     
-    # Preparamos un DataFrame auxiliar para los gráficos excluyendo meses futuros en 0
     df_plot = df_data.copy()
     df_plot['Mes_Str'] = df_plot['Mes'].map(dict(zip(range(1, 13), meses_nombres)))
     
-    # Función para crear mini gráficos Plotly y guardarlos como PNG
     def generar_grafico(df, col_real, objetivo_val, titulo_grafico, is_pct=False, is_lower_better=True):
         fig = go.Figure()
         
-        # Filtrar meses sin producción (0)
         df_filtered = df[df['Tiempo_Total_Disponible_Min'] > 0].copy() if col_real == 'DT (%)' else df.copy()
+        color_barra = '#1f77b4' 
         
-        color_barra = '#1f77b4' # Azul estándar
-        
-        # Barras del Valor Real
         text_format = [f"{v:.1f}%" if is_pct else f"{v:.0f}" for v in df_filtered[col_real]]
+        
         fig.add_trace(go.Bar(
             x=df_filtered['Mes_Str'], 
             y=df_filtered[col_real], 
@@ -151,7 +148,6 @@ def crear_pdf_pd_excel(df_data, anio):
             textfont=dict(size=10)
         ))
         
-        # Línea de Objetivo (Target)
         fig.add_trace(go.Scatter(
             x=df['Mes_Str'], 
             y=[objetivo_val] * 12, 
@@ -162,9 +158,13 @@ def crear_pdf_pd_excel(df_data, anio):
         
         y_title = "Porcentaje (%)" if is_pct else "Minutos"
         
+        # FIX: Se corrigió la sintaxis de 'titlefont' adaptándola a las versiones nuevas de Plotly
         fig.update_layout(
             title=dict(text=titulo_grafico, font=dict(size=14)),
-            yaxis=dict(title=y_title, titlefont=dict(size=10), tickfont=dict(size=9)),
+            yaxis=dict(
+                title=dict(text=y_title, font=dict(size=10)), 
+                tickfont=dict(size=9)
+            ),
             xaxis=dict(tickfont=dict(size=10)),
             margin=dict(l=30, r=10, t=30, b=20),
             showlegend=True,
@@ -172,7 +172,7 @@ def crear_pdf_pd_excel(df_data, anio):
             height=200, width=450, 
             plot_bgcolor='white'
         )
-        # Añadir cuadrícula tenue
+        
         fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='LightGray')
         
         tmp_chart = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
@@ -180,12 +180,10 @@ def crear_pdf_pd_excel(df_data, anio):
         return tmp_chart.name
 
     def dibujar_bloque_con_grafico(x, y, titulo, objetivo_val, col_real, is_lower_better, is_pct=False):
-        # 1. GENERAR Y DIBUJAR GRÁFICO (Arriba de la tabla)
         img_path = generar_grafico(df_plot, col_real, objetivo_val, titulo, is_pct, is_lower_better)
         pdf.image(img_path, x=x, y=y, w=125, h=55)
         os.remove(img_path)
         
-        # 2. DIBUJAR TABLA (Abajo del gráfico)
         y_tabla = y + 55 
         pdf.set_xy(x, y_tabla)
         
@@ -193,7 +191,6 @@ def crear_pdf_pd_excel(df_data, anio):
         w_m = 9.5    
         w_tot = w_lbl + (w_m * 12) 
         
-        # FILA DE TÍTULO OSCURO
         pdf.set_font("Arial", 'B', 8)
         pdf.set_text_color(255, 255, 255)
         pdf.set_fill_color(31, 78, 121) 
@@ -205,14 +202,12 @@ def crear_pdf_pd_excel(df_data, anio):
         pdf.cell(12, 5, "Estado", border=1, align='C', fill=True)
         pdf.cell(12, 5, "Tend.", border=1, align='C', fill=True)
         
-        # FILA DE MESES
         pdf.set_xy(x, y_tabla + 5)
         pdf.cell(w_lbl, 5, "", border=0, align='C') 
         pdf.set_fill_color(221, 235, 247) 
         for m in meses_nombres:
             pdf.cell(w_m, 5, m, border=1, align='C', fill=True)
             
-        # FILA T (OBJETIVO)
         pdf.set_xy(x, y_tabla + 10)
         pdf.set_font("Arial", 'B', 8)
         pdf.cell(w_lbl, 5, "T", border=1, align='C', fill=True)
@@ -222,7 +217,6 @@ def crear_pdf_pd_excel(df_data, anio):
         for _ in range(12):
             pdf.cell(w_m, 5, obj_str, border=1, align='C')
             
-        # FILA C (REAL)
         pdf.set_xy(x, y_tabla + 15)
         pdf.set_font("Arial", 'B', 8)
         pdf.set_fill_color(221, 235, 247)
@@ -248,14 +242,10 @@ def crear_pdf_pd_excel(df_data, anio):
             pdf.cell(w_m, 5, val_str, border=1, align='C')
         pdf.set_text_color(0,0,0) 
 
-    # --- DIBUJAR LOS 3 BLOQUES (GRÁFICO + TABLA) ---
-    
-    # Fila 1: Down Time (Izquierda) y MTTR (Derecha)
     y_fila_1 = 15
     dibujar_bloque_con_grafico(x=15, y=y_fila_1, titulo="Down Time Matriceria", objetivo_val=TARGET_DT_PCT, col_real='DT (%)', is_lower_better=True, is_pct=True)
     dibujar_bloque_con_grafico(x=155, y=y_fila_1, titulo="MTTR - Tiempo medio parada (Min)", objetivo_val=TARGET_MTTR_MIN, col_real='MTTR (Min)', is_lower_better=True)
     
-    # Fila 2: MTBF (Izquierda)
     y_fila_2 = 105
     dibujar_bloque_con_grafico(x=15, y=y_fila_2, titulo="MTBF - Tiempo medio entre fallas (Min)", objetivo_val=TARGET_MTBF_MIN, col_real='MTBF (Min)', is_lower_better=False)
 
@@ -292,7 +282,6 @@ if not df_anual.empty:
             
     st.divider()
     
-    # Mostramos los gráficos interactivos en Streamlit para el usuario web
     st.subheader("Gráficos de Tendencia (Vista Web)")
     df_chart = df_anual[df_anual['Tiempo_Total_Disponible_Min'] > 0].copy()
     
