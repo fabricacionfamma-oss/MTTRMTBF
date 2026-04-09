@@ -171,22 +171,23 @@ def crear_pdf_pd_excel(df_data, anio, meses_filtrados):
     def generar_grafico_tendencia_pdf(df, col_real, obj_t, obj_c, is_pct):
         df_plot = df[df['Mes'].isin(meses_filtrados)].copy()
         
-        # 🟢 CORRECCIÓN: Usar una secuencia numérica estricta para alinear con FPDF
-        df_plot['Eje_X'] = list(range(num_meses)) 
+        # 🟢 CORRECCIÓN CRÍTICA: Extraer a listas puras para eliminar interferencias de Pandas
+        y_vals = df_plot[col_real].tolist()
+        x_vals = list(range(len(y_vals))) # Genera [0, 1, 2...] estrictamente
         
         fig = go.Figure()
-        text_format = [f"{v:.1f}%" if is_pct else f"{v:.0f}" for v in df_plot[col_real]]
+        text_format = [f"{v:.1f}%" if is_pct else f"{v:.0f}" for v in y_vals]
         
         fig.add_trace(go.Bar(
-            x=df_plot['Eje_X'], y=df_plot[col_real], name="Real (A)",
+            x=x_vals, y=y_vals, name="Real (A)",
             marker_color='#1f77b4', text=text_format, textposition='auto', textfont=dict(size=12)
         ))
         fig.add_trace(go.Scatter(
-            x=df_plot['Eje_X'], y=[obj_t] * num_meses, name="Sup. (T)",
+            x=x_vals, y=[obj_t] * len(x_vals), name="Sup. (T)",
             mode='lines', line=dict(color='red', dash='dash', width=2)
         ))
         fig.add_trace(go.Scatter(
-            x=df_plot['Eje_X'], y=[obj_c] * num_meses, name="Inf. (C)",
+            x=x_vals, y=[obj_c] * len(x_vals), name="Inf. (C)",
             mode='lines', line=dict(color='orange', dash='dot', width=2)
         ))
         
@@ -194,9 +195,15 @@ def crear_pdf_pd_excel(df_data, anio, meses_filtrados):
         
         fig.update_layout(
             yaxis=dict(title=dict(text=y_title, font=dict(size=9)), tickfont=dict(size=8)),
-            # 🟢 CORRECCIÓN: Rango matemático exacto basado en la longitud numérica
-            xaxis=dict(showticklabels=False, showgrid=False, zeroline=False, range=[-0.5, num_meses - 0.5]),
-            # 🟢 CORRECCIÓN: pad=0 asegura que no haya píxeles extra arruinando la alineación
+            
+            # 🟢 CORRECCIÓN CRÍTICA: Eje forzado a linear y auto-escalado apagado
+            xaxis=dict(
+                type='linear',
+                autorange=False,
+                range=[-0.5, len(x_vals) - 0.5],
+                showticklabels=False, showgrid=False, zeroline=False
+            ),
+            
             margin=dict(l=50, r=0, t=25, b=0, pad=0, autoexpand=False), 
             height=175, width=590, 
             bargap=0.15,
