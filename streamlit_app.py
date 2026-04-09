@@ -45,7 +45,7 @@ TARGET_MTBF_T = 600
 TARGET_MTBF_C = 500     
 
 # ==========================================
-# FILTROS DINÁMICOS (RECORTADO PARA VISIBILIDAD)
+# FILTROS DINÁMICOS
 # ==========================================
 st.markdown('<div class="filter-box">', unsafe_allow_html=True)
 st.subheader("🔍 Filtros del Reporte")
@@ -210,7 +210,7 @@ def crear_pdf_pd_excel(df_data, anio, meses_filtrados):
         return tmp_chart.name
 
     def dibujar_bloque_completo(x, y, titulo, obj_t, obj_c, col_real, col_acum, is_lower_better, is_pct=False):
-        w_lbl = 10     
+        w_lbl = 10      
         w_tot = 118 
         w_m = (w_tot - w_lbl) / num_meses 
         
@@ -261,11 +261,11 @@ def crear_pdf_pd_excel(df_data, anio, meses_filtrados):
             if df_data[df_data['Mes'] == i]['Tiempo_Total_Disponible_Min'].values[0] > 0:
                 val_str = f"{val_a:.1f}%" if is_pct else f"{val_a:.0f}" 
                 if is_lower_better:
-                    if val_a <= obj_c: pdf.set_text_color(33, 195, 84)       
+                    if val_a <= obj_c: pdf.set_text_color(33, 195, 84)        
                     elif val_a > obj_t: pdf.set_text_color(220, 20, 20)      
                     else: pdf.set_text_color(200, 150, 0)                    
                 else:
-                    if val_a >= obj_t: pdf.set_text_color(33, 195, 84)       
+                    if val_a >= obj_t: pdf.set_text_color(33, 195, 84)        
                     elif val_a < obj_c: pdf.set_text_color(220, 20, 20)      
                     else: pdf.set_text_color(200, 150, 0)                    
             else:
