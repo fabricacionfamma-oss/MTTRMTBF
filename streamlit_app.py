@@ -37,14 +37,14 @@ st.divider()
 # ==========================================
 # OBJETIVOS (TARGETS T y C)
 # ==========================================
-TARGET_DT_T = 5.2       # Límite Superior Down Time 
-TARGET_DT_C = 3.0       # Límite Inferior Down Time 
+TARGET_DT_T = 5.2       # Límite Superior Down Time
+TARGET_DT_C = 3.0       # Límite Inferior Down Time
 
 TARGET_MTTR_T = 30      # Límite Superior MTTR
 TARGET_MTTR_C = 20      # Límite Inferior MTTR
 
-TARGET_MTBF_T = 600     # Límite Superior MTBF 
-TARGET_MTBF_C = 500     # Límite Inferior MTBF 
+TARGET_MTBF_T = 600     # Límite Superior MTBF
+TARGET_MTBF_C = 500     # Límite Inferior MTBF
 
 # ==========================================
 # FILTROS
@@ -165,12 +165,11 @@ def crear_pdf_pd_excel(df_data, anio):
         
         y_title = "Porcentaje (%)" if is_pct else "Minutos"
         
-        # Redujimos un poco la altura (height) y achicamos márgenes internos para que sea más compacto
         fig.update_layout(
             yaxis=dict(title=dict(text=y_title, font=dict(size=9)), tickfont=dict(size=8)),
-            xaxis=dict(tickfont=dict(size=9)),
-            margin=dict(l=35, r=10, t=20, b=25), 
-            height=180, width=500, 
+            xaxis=dict(showticklabels=False), # OCULTA ETIQUETAS E, F, M PARA QUE NO CHOQUEN CON LA TABLA
+            margin=dict(l=35, r=10, t=15, b=5), # Margen inferior mínimo para pegarse a la tabla
+            height=160, width=500, 
             showlegend=True,
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=9)),
             plot_bgcolor='white'
@@ -184,9 +183,7 @@ def crear_pdf_pd_excel(df_data, anio):
     def dibujar_bloque_completo(x, y, titulo, obj_t, obj_c, col_real, col_acum, is_lower_better, is_pct=False):
         # --- 1. DIBUJAR TÍTULO OSCURO ---
         pdf.set_xy(x, y)
-        w_lbl = 8 
-        w_m = 9.0  # (Reducido de 9.5 a 9.0) Hace la tabla más pequeña y compacta
-        w_tot = w_lbl + (w_m * 12)  # Ancho total: 116 mm
+        w_lbl = 8; w_m = 9.0; w_tot = w_lbl + (w_m * 12) 
         
         pdf.set_font("Arial", 'B', 8)
         pdf.set_text_color(255, 255, 255); pdf.set_fill_color(31, 78, 121); pdf.set_draw_color(0, 0, 0); pdf.set_line_width(0.2)
@@ -194,41 +191,45 @@ def crear_pdf_pd_excel(df_data, anio):
 
         # --- 2. DIBUJAR GRÁFICO ---
         img_path = generar_grafico_tendencia_pdf(df_data, col_real, obj_t, obj_c, is_pct)
-        # y+6 acerca el gráfico suavemente al título. h=40 comprime la imagen.
-        pdf.image(img_path, x=x, y=y + 6, w=w_tot, h=40)
+        pdf.image(img_path, x=x, y=y + 5, w=w_tot, h=35) # Gráfico compacto y justo debajo del título
         os.remove(img_path)
 
-        # --- 3. DIBUJAR TABLA ---
-        y_tabla = y + 47  # Se ajustó la altura para que esté pegada al gráfico
-        pdf.set_xy(x, y_tabla)
-        pdf.set_fill_color(221, 235, 247) 
+        # --- 3. DIBUJAR TABLA (T, C, A) ---
+        y_tabla = y + 40 # Comienza exactamente donde termina el gráfico, creando un solo bloque
         
-        pdf.cell(w_lbl, 5, "", border=0, align='C') 
+        # Fila Meses
+        pdf.set_xy(x, y_tabla)
+        pdf.set_fill_color(221, 235, 247); pdf.set_text_color(0,0,0)
+        pdf.cell(w_lbl, 5, "", border=0, align='C', fill=False) 
         for m in meses_nombres: 
             pdf.cell(w_m, 5, m, border=1, align='C', fill=True)
             
+        # Fila T 
         pdf.set_xy(x, y_tabla + 5)
         pdf.set_font("Arial", 'B', 8)
+        pdf.set_fill_color(255, 255, 255)
         pdf.cell(w_lbl, 5, "T", border=1, align='C', fill=True)
-        pdf.set_font("Arial", '', 7); pdf.set_fill_color(255, 255, 255)
+        pdf.set_font("Arial", '', 7)
         t_str = f"{obj_t}%" if is_pct else f"{obj_t}"
         for _ in range(12): 
-            pdf.cell(w_m, 5, t_str, border=1, align='C')
+            pdf.cell(w_m, 5, t_str, border=1, align='C', fill=True) # FILL=TRUE OBLIGATORIO
             
+        # Fila C 
         pdf.set_xy(x, y_tabla + 10)
         pdf.set_font("Arial", 'B', 8)
-        pdf.set_fill_color(221, 235, 247); pdf.set_text_color(0,0,0)
+        pdf.set_fill_color(221, 235, 247)
         pdf.cell(w_lbl, 5, "C", border=1, align='C', fill=True)
-        pdf.set_font("Arial", '', 7); pdf.set_fill_color(255, 255, 255)
+        pdf.set_font("Arial", '', 7)
         c_str = f"{obj_c}%" if is_pct else f"{obj_c}"
         for _ in range(12): 
-            pdf.cell(w_m, 5, c_str, border=1, align='C')
+            pdf.cell(w_m, 5, c_str, border=1, align='C', fill=True)
             
+        # Fila A 
         pdf.set_xy(x, y_tabla + 15)
         pdf.set_font("Arial", 'B', 8)
-        pdf.set_fill_color(221, 235, 247); pdf.set_text_color(0,0,0)
+        pdf.set_fill_color(255, 255, 255)
         pdf.cell(w_lbl, 5, "A", border=1, align='C', fill=True)
-        pdf.set_font("Arial", 'B', 7); pdf.set_fill_color(255, 255, 255)
+        pdf.set_font("Arial", 'B', 7)
         
         for i in range(1, 13):
             val_a = df_data[df_data['Mes'] == i][col_real].values[0]
@@ -245,17 +246,17 @@ def crear_pdf_pd_excel(df_data, anio):
             else:
                 val_str = "-"
                 pdf.set_text_color(150, 150, 150) 
-            pdf.cell(w_m, 5, val_str, border=1, align='C')
+            pdf.cell(w_m, 5, val_str, border=1, align='C', fill=True)
+        
         pdf.set_text_color(0,0,0) 
 
-    # --- DISTRIBUCIÓN DE LOS BLOQUES (X, Y) ---
-    # Bajamos el inicio general a Y=25. 
-    # El bloque izquierdo empieza en X=25. El bloque derecho empieza en X=150.
+    # --- DIBUJAR LOS BLOQUES ESPACIADOS ---
+    # Fila 1 (Y=25)
     dibujar_bloque_completo(x=25, y=25, titulo="Down Time Matriceria", obj_t=TARGET_DT_T, obj_c=TARGET_DT_C, col_real='DT (%)', col_acum='A_DT (%)', is_lower_better=True, is_pct=True)
     dibujar_bloque_completo(x=150, y=25, titulo="MTTR - Tiempo medio parada (Min)", obj_t=TARGET_MTTR_T, obj_c=TARGET_MTTR_C, col_real='MTTR (Min)', col_acum='A_MTTR (Min)', is_lower_better=True)
     
-    # La Fila 2 empieza en Y=105, dejando un espacio compacto y limpio.
-    dibujar_bloque_completo(x=25, y=105, titulo="MTBF - Tiempo medio entre fallas (Min)", obj_t=TARGET_MTBF_T, obj_c=TARGET_MTBF_C, col_real='MTBF (Min)', col_acum='A_MTBF (Min)', is_lower_better=False)
+    # Fila 2 (Y=95)
+    dibujar_bloque_completo(x=25, y=95, titulo="MTBF - Tiempo medio entre fallas (Min)", obj_t=TARGET_MTBF_T, obj_c=TARGET_MTBF_C, col_real='MTBF (Min)', col_acum='A_MTBF (Min)', is_lower_better=False)
 
     return pdf.output(dest='S').encode('latin-1')
 
