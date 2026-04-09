@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
 from fpdf import FPDF
 import tempfile
@@ -26,7 +25,7 @@ st.markdown("""
 col_title, col_btn = st.columns([4, 1])
 with col_title:
     st.title("⚙️ Análisis de MTBF, MTTR y Down Time")
-    st.write("Indicadores de Confiabilidad y Mantenibilidad en MINUTOS con formato matricial (PD Excel).")
+    st.write("Indicadores con Gráficos Individuales sobre Tablas Matriciales (PD Excel).")
 with col_btn:
     if st.button("Limpiar Caché", use_container_width=True):
         st.cache_data.clear()
@@ -37,9 +36,9 @@ st.divider()
 # ==========================================
 # OBJETIVOS (TARGETS) SEGÚN EXCEL PD
 # ==========================================
-TARGET_DT_PCT = 5.2       # 5.2% (0.052 en el Excel)
+TARGET_DT_PCT = 5.2       # 5.2%
 TARGET_MTTR_MIN = 30      # 30 minutos
-TARGET_MTBF_MIN = 500     # 500 minutos (ajustar si el objetivo real era diferente)
+TARGET_MTBF_MIN = 500     # 500 minutos
 
 # ==========================================
 # FILTROS
@@ -88,17 +87,11 @@ def fetch_annual_data(anio):
         df_anual = pd.merge(df_meses, df_uptime, on='Mes', how='left')
         df_anual = pd.merge(df_anual, df_fallas, on='Mes', how='left').fillna(0)
         
-        # Mantener los cálculos base estrictamente en Minutos
         df_anual['Uptime_Min'] = df_anual['Tiempo_Productivo_Min']
         df_anual['Downtime_Min'] = df_anual['Tiempo_Reparacion_Min']
         
-        # Cálculos de KPI
         df_anual['DT (%)'] = df_anual.apply(lambda r: (r['Downtime_Min'] / r['Tiempo_Total_Disponible_Min'] * 100) if r['Tiempo_Total_Disponible_Min'] > 0 else 0, axis=1)
-        
-        # MTBF en Minutos
         df_anual['MTBF (Min)'] = df_anual.apply(lambda r: r['Uptime_Min'] / r['Cantidad_Fallas'] if r['Cantidad_Fallas'] > 0 else (r['Uptime_Min'] if r['Uptime_Min'] > 0 else 0), axis=1)
-        
-        # MTTR en Minutos
         df_anual['MTTR (Min)'] = df_anual.apply(lambda r: r['Downtime_Min'] / r['Cantidad_Fallas'] if r['Cantidad_Fallas'] > 0 else 0, axis=1)
         
         return df_anual
@@ -115,14 +108,14 @@ class ReportePD(FPDF):
     def header(self):
         self.set_font("Arial", 'B', 14)
         self.set_text_color(15, 76, 129)
-        self.cell(0, 10, f"Reporte de Indicadores de Mantenimiento Matrices (Formato PD) - Año {anio_sel}", ln=True, align='C')
+        self.cell(0, 8, f"Reporte de Indicadores de Mantenimiento Matrices - Año {anio_sel}", ln=True, align='C')
         self.set_draw_color(15, 76, 129)
         self.set_line_width(0.5)
         self.line(10, self.get_y(), 287, self.get_y())
-        self.ln(5)
+        self.ln(2)
 
     def footer(self):
-        self.set_y(-15)
+        self.set_y(-10)
         self.set_font("Arial", "I", 8)
         self.set_text_color(128)
         self.cell(0, 10, f"Página {self.page_no()}", 0, 0, "C")
@@ -131,13 +124,76 @@ def crear_pdf_pd_excel(df_data, anio):
     pdf = ReportePD(orientation='L', unit='mm', format='A4')
     pdf.add_page()
     
-    def dibujar_bloque_excel(x, y, titulo, objetivo_val, col_real, is_lower_better, is_pct=False):
-        pdf.set_xy(x, y)
+    meses_nombres = ['E', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D']
+    
+    # Preparamos un DataFrame auxiliar para los gráficos excluyendo meses futuros en 0
+    df_plot = df_data.copy()
+    df_plot['Mes_Str'] = df_plot['Mes'].map(dict(zip(range(1, 13), meses_nombres)))
+    
+    # Función para crear mini gráficos Plotly y guardarlos como PNG
+    def generar_grafico(df, col_real, objetivo_val, titulo_grafico, is_pct=False, is_lower_better=True):
+        fig = go.Figure()
+        
+        # Filtrar meses sin producción (0)
+        df_filtered = df[df['Tiempo_Total_Disponible_Min'] > 0].copy() if col_real == 'DT (%)' else df.copy()
+        
+        color_barra = '#1f77b4' # Azul estándar
+        
+        # Barras del Valor Real
+        text_format = [f"{v:.1f}%" if is_pct else f"{v:.0f}" for v in df_filtered[col_real]]
+        fig.add_trace(go.Bar(
+            x=df_filtered['Mes_Str'], 
+            y=df_filtered[col_real], 
+            name="Real", 
+            marker_color=color_barra, 
+            text=text_format, 
+            textposition='auto',
+            textfont=dict(size=10)
+        ))
+        
+        # Línea de Objetivo (Target)
+        fig.add_trace(go.Scatter(
+            x=df['Mes_Str'], 
+            y=[objetivo_val] * 12, 
+            name="Objetivo", 
+            mode='lines', 
+            line=dict(color='red', dash='dash', width=2)
+        ))
+        
+        y_title = "Porcentaje (%)" if is_pct else "Minutos"
+        
+        fig.update_layout(
+            title=dict(text=titulo_grafico, font=dict(size=14)),
+            yaxis=dict(title=y_title, titlefont=dict(size=10), tickfont=dict(size=9)),
+            xaxis=dict(tickfont=dict(size=10)),
+            margin=dict(l=30, r=10, t=30, b=20),
+            showlegend=True,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1, font=dict(size=10)),
+            height=200, width=450, 
+            plot_bgcolor='white'
+        )
+        # Añadir cuadrícula tenue
+        fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='LightGray')
+        
+        tmp_chart = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
+        fig.write_image(tmp_chart.name, engine="kaleido")
+        return tmp_chart.name
+
+    def dibujar_bloque_con_grafico(x, y, titulo, objetivo_val, col_real, is_lower_better, is_pct=False):
+        # 1. GENERAR Y DIBUJAR GRÁFICO (Arriba de la tabla)
+        img_path = generar_grafico(df_plot, col_real, objetivo_val, titulo, is_pct, is_lower_better)
+        pdf.image(img_path, x=x, y=y, w=125, h=55)
+        os.remove(img_path)
+        
+        # 2. DIBUJAR TABLA (Abajo del gráfico)
+        y_tabla = y + 55 
+        pdf.set_xy(x, y_tabla)
+        
         w_lbl = 8    
         w_m = 9.5    
         w_tot = w_lbl + (w_m * 12) 
         
-        # 1. FILA DE TÍTULO
+        # FILA DE TÍTULO OSCURO
         pdf.set_font("Arial", 'B', 8)
         pdf.set_text_color(255, 255, 255)
         pdf.set_fill_color(31, 78, 121) 
@@ -149,16 +205,15 @@ def crear_pdf_pd_excel(df_data, anio):
         pdf.cell(12, 5, "Estado", border=1, align='C', fill=True)
         pdf.cell(12, 5, "Tend.", border=1, align='C', fill=True)
         
-        # 2. FILA DE MESES
-        pdf.set_xy(x, y + 5)
+        # FILA DE MESES
+        pdf.set_xy(x, y_tabla + 5)
         pdf.cell(w_lbl, 5, "", border=0, align='C') 
         pdf.set_fill_color(221, 235, 247) 
-        meses = ['E', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D']
-        for m in meses:
+        for m in meses_nombres:
             pdf.cell(w_m, 5, m, border=1, align='C', fill=True)
             
-        # 3. FILA T (OBJETIVO)
-        pdf.set_xy(x, y + 10)
+        # FILA T (OBJETIVO)
+        pdf.set_xy(x, y_tabla + 10)
         pdf.set_font("Arial", 'B', 8)
         pdf.cell(w_lbl, 5, "T", border=1, align='C', fill=True)
         pdf.set_font("Arial", '', 7)
@@ -167,8 +222,8 @@ def crear_pdf_pd_excel(df_data, anio):
         for _ in range(12):
             pdf.cell(w_m, 5, obj_str, border=1, align='C')
             
-        # 4. FILA C (REAL)
-        pdf.set_xy(x, y + 15)
+        # FILA C (REAL)
+        pdf.set_xy(x, y_tabla + 15)
         pdf.set_font("Arial", 'B', 8)
         pdf.set_fill_color(221, 235, 247)
         pdf.set_text_color(0,0,0)
@@ -179,9 +234,7 @@ def crear_pdf_pd_excel(df_data, anio):
         for i in range(1, 13):
             val = df_data[df_data['Mes'] == i][col_real].values[0]
             if val > 0:
-                # Si no es porcentaje, mostramos sin decimales para los minutos que pueden ser grandes
                 val_str = f"{val:.1f}%" if is_pct else f"{val:.0f}" 
-                
                 if is_lower_better:
                     if val <= objetivo_val: pdf.set_text_color(33, 195, 84) # Verde
                     else: pdf.set_text_color(220, 20, 20) # Rojo
@@ -194,42 +247,17 @@ def crear_pdf_pd_excel(df_data, anio):
                 
             pdf.cell(w_m, 5, val_str, border=1, align='C')
         pdf.set_text_color(0,0,0) 
-        
-        return y + 25
 
-    # Bloque 1: Down Time (Izquierda Arriba)
-    dibujar_bloque_excel(x=15, y=30, titulo="Down Time Matriceria", objetivo_val=TARGET_DT_PCT, col_real='DT (%)', is_lower_better=True, is_pct=True)
+    # --- DIBUJAR LOS 3 BLOQUES (GRÁFICO + TABLA) ---
     
-    # Bloque 2: MTTR (Derecha Arriba)
-    dibujar_bloque_excel(x=155, y=30, titulo="MTTR - Tiempo medio parada (Min)", objetivo_val=TARGET_MTTR_MIN, col_real='MTTR (Min)', is_lower_better=True)
+    # Fila 1: Down Time (Izquierda) y MTTR (Derecha)
+    y_fila_1 = 15
+    dibujar_bloque_con_grafico(x=15, y=y_fila_1, titulo="Down Time Matriceria", objetivo_val=TARGET_DT_PCT, col_real='DT (%)', is_lower_better=True, is_pct=True)
+    dibujar_bloque_con_grafico(x=155, y=y_fila_1, titulo="MTTR - Tiempo medio parada (Min)", objetivo_val=TARGET_MTTR_MIN, col_real='MTTR (Min)', is_lower_better=True)
     
-    # Bloque 3: MTBF (Izquierda Abajo)
-    dibujar_bloque_excel(x=15, y=60, titulo="MTBF - Tiempo medio entre fallas (Min)", objetivo_val=TARGET_MTBF_MIN, col_real='MTBF (Min)', is_lower_better=False)
-
-    # --- GRÁFICO PLOTLY DEBAJO ---
-    y_base_grafico = 95
-    df_plot = df_data[df_data['Tiempo_Total_Disponible_Min'] > 0].copy()
-    if not df_plot.empty:
-        meses_map = {1:'E', 2:'F', 3:'M', 4:'A', 5:'M', 6:'J', 7:'J', 8:'A', 9:'S', 10:'O', 11:'N', 12:'D'}
-        df_plot['Mes_Str'] = df_plot['Mes'].map(meses_map)
-        
-        fig = go.Figure()
-        fig.add_trace(go.Bar(x=df_plot['Mes_Str'], y=df_plot['MTBF (Min)'], name="MTBF (Min)", marker_color='#1f77b4', text=df_plot['MTBF (Min)'].round(0), textposition='auto'))
-        fig.add_trace(go.Scatter(x=df_plot['Mes_Str'], y=df_plot['MTTR (Min)'], name="MTTR (Min)", mode='lines+markers', yaxis='y2', line=dict(color='#ff7f0e', width=3), marker=dict(size=8)))
-        
-        fig.update_layout(
-            title="Evolución Mensual: MTBF vs MTTR (en Minutos)",
-            yaxis=dict(title="MTBF (Minutos)"),
-            yaxis2=dict(title="MTTR (Minutos)", overlaying='y', side='right'),
-            legend=dict(x=0.01, y=1.1, orientation="h"),
-            margin=dict(l=40, r=40, t=40, b=20),
-            height=300, width=950, plot_bgcolor='rgba(0,0,0,0)'
-        )
-        
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_chart:
-            fig.write_image(tmp_chart.name, engine="kaleido")
-            pdf.image(tmp_chart.name, x=15, y=y_base_grafico, w=260)
-            os.remove(tmp_chart.name)
+    # Fila 2: MTBF (Izquierda)
+    y_fila_2 = 105
+    dibujar_bloque_con_grafico(x=15, y=y_fila_2, titulo="MTBF - Tiempo medio entre fallas (Min)", objetivo_val=TARGET_MTBF_MIN, col_real='MTBF (Min)', is_lower_better=False)
 
     return pdf.output(dest='S').encode('latin-1')
 
@@ -264,25 +292,29 @@ if not df_anual.empty:
             
     st.divider()
     
-    st.subheader("Tendencia Anual de Confiabilidad")
+    # Mostramos los gráficos interactivos en Streamlit para el usuario web
+    st.subheader("Gráficos de Tendencia (Vista Web)")
     df_chart = df_anual[df_anual['Tiempo_Total_Disponible_Min'] > 0].copy()
+    
     if not df_chart.empty:
         df_chart['Mes_Str'] = df_chart['Mes'].map(meses_map)
         
-        fig = go.Figure()
-        fig.add_trace(go.Bar(x=df_chart['Mes_Str'], y=df_chart['MTBF (Min)'], name="MTBF Real (Min)", marker_color='#3498DB'))
-        fig.add_trace(go.Scatter(x=df_chart['Mes_Str'], y=[TARGET_MTBF_MIN]*len(df_chart), name="Objetivo MTBF", mode='lines', line=dict(color='green', dash='dash')))
+        c1, c2, c3 = st.columns(3)
         
-        fig.add_trace(go.Scatter(x=df_chart['Mes_Str'], y=df_chart['MTTR (Min)'], name="MTTR Real (Min)", yaxis='y2', mode='lines+markers', line=dict(color='#E74C3C', width=3)))
-        fig.add_trace(go.Scatter(x=df_chart['Mes_Str'], y=[TARGET_MTTR_MIN]*len(df_chart), name="Objetivo MTTR", yaxis='y2', mode='lines', line=dict(color='orange', dash='dash')))
-
-        fig.update_layout(
-            yaxis=dict(title="MTBF (Minutos)"),
-            yaxis2=dict(title="MTTR (Minutos)", overlaying='y', side='right'),
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-            plot_bgcolor='white', hovermode="x unified"
-        )
-        st.plotly_chart(fig, use_container_width=True)
+        with c1:
+            fig_dt = px.bar(df_chart, x='Mes_Str', y='DT (%)', title='Down Time (%)')
+            fig_dt.add_hline(y=TARGET_DT_PCT, line_dash="dash", line_color="red", annotation_text="Objetivo")
+            st.plotly_chart(fig_dt, use_container_width=True)
+            
+        with c2:
+            fig_mttr = px.bar(df_chart, x='Mes_Str', y='MTTR (Min)', title='MTTR (Min)')
+            fig_mttr.add_hline(y=TARGET_MTTR_MIN, line_dash="dash", line_color="red", annotation_text="Objetivo")
+            st.plotly_chart(fig_mttr, use_container_width=True)
+            
+        with c3:
+            fig_mtbf = px.bar(df_chart, x='Mes_Str', y='MTBF (Min)', title='MTBF (Min)')
+            fig_mtbf.add_hline(y=TARGET_MTBF_MIN, line_dash="dash", line_color="red", annotation_text="Objetivo")
+            st.plotly_chart(fig_mtbf, use_container_width=True)
 
 else:
     st.warning("No hay datos disponibles para el año seleccionado.")
