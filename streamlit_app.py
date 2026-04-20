@@ -25,7 +25,7 @@ st.markdown("""
 col_title, col_btn = st.columns([4, 1])
 with col_title:
     st.title("⚙️ Análisis de MTBF, MTTR y Down Time")
-    st.write("Generador de Reportes PDF.")
+    st.write("Generador de Reportes PDF - Exclusivo Estampado.")
 with col_btn:
     if st.button("Limpiar Caché", use_container_width=True):
         st.cache_data.clear()
@@ -79,6 +79,17 @@ if not meses_sel:
 
 meses_activos = [meses_nombres.index(m) + 1 for m in meses_sel]
 
+# Lógica para nombrar el archivo: "ENE_A_MESSELECCIONADO"
+if len(meses_sel) > 1:
+    # Asume que seleccionaron en orden, toma el primero y el último
+    mes_inicio = meses_sel[0].upper()
+    mes_fin = meses_sel[-1].upper()
+    nombre_meses_pdf = f"{mes_inicio}_A_{mes_fin}"
+elif len(meses_sel) == 1:
+    nombre_meses_pdf = meses_sel[0].upper()
+else:
+    nombre_meses_pdf = "VARIOS"
+
 # ==========================================
 # EXTRACCIÓN Y PROCESAMIENTO DE DATOS
 # ==========================================
@@ -87,6 +98,7 @@ def fetch_annual_data(anio):
     try:
         conn = st.connection("wii_bi", type="sql")
         
+        # MODIFICACIÓN: Agregado el filtro WHERE para que solo tome Estampado
         q_uptime = f"""
             SELECT MONTH(p.Date) as Mes, 
                    SUM(p.ProductiveTime) as Tiempo_Productivo_Min,
@@ -94,10 +106,12 @@ def fetch_annual_data(anio):
             FROM PROD_D_03 p
             JOIN CELL c ON p.CellId = c.CellId
             WHERE YEAR(p.Date) = {anio}
+              AND (UPPER(c.Name) LIKE '%LINEA%' OR UPPER(c.Name) LIKE '%GENERAL%')
             GROUP BY MONTH(p.Date)
         """
         df_uptime = conn.query(q_uptime)
         
+        # MODIFICACIÓN: Agregado el JOIN con CELL y el filtro para Estampado
         q_fallas = f"""
             SELECT MONTH(e.Date) as Mes, 
                    COUNT(e.Id) as Cantidad_Fallas,
@@ -107,7 +121,9 @@ def fetch_annual_data(anio):
             LEFT JOIN EVENTTYPE t2 ON e.EventTypeLevel2 = t2.EventTypeId
             LEFT JOIN EVENTTYPE t3 ON e.EventTypeLevel3 = t3.EventTypeId
             LEFT JOIN EVENTTYPE t4 ON e.EventTypeLevel4 = t4.EventTypeId
+            LEFT JOIN CELL c ON e.CellId = c.CellId
             WHERE YEAR(e.Date) = {anio}
+              AND (UPPER(c.Name) LIKE '%LINEA%' OR UPPER(c.Name) LIKE '%GENERAL%')
               AND (
                   UPPER(t1.Name) LIKE '%MATRI%' OR UPPER(t2.Name) LIKE '%MATRI%' OR UPPER(t3.Name) LIKE '%MATRI%' OR UPPER(t4.Name) LIKE '%MATRI%'
                   OR UPPER(t1.Name) LIKE '%HERRAMENTAL%' OR UPPER(t2.Name) LIKE '%HERRAMENTAL%'
@@ -171,9 +187,8 @@ def crear_pdf_pd_excel(df_data, anio, meses_filtrados):
     def generar_grafico_tendencia_pdf(df, col_real, obj_t, obj_c, is_pct):
         df_plot = df[df['Mes'].isin(meses_filtrados)].copy()
         
-        # 🟢 CORRECCIÓN CRÍTICA: Extraer a listas puras para eliminar interferencias de Pandas
         y_vals = df_plot[col_real].tolist()
-        x_vals = list(range(len(y_vals))) # Genera [0, 1, 2...] estrictamente
+        x_vals = list(range(len(y_vals)))
         
         fig = go.Figure()
         text_format = [f"{v:.1f}%" if is_pct else f"{v:.0f}" for v in y_vals]
@@ -195,15 +210,12 @@ def crear_pdf_pd_excel(df_data, anio, meses_filtrados):
         
         fig.update_layout(
             yaxis=dict(title=dict(text=y_title, font=dict(size=9)), tickfont=dict(size=8)),
-            
-            # 🟢 CORRECCIÓN CRÍTICA: Eje forzado a linear y auto-escalado apagado
             xaxis=dict(
                 type='linear',
                 autorange=False,
                 range=[-0.5, len(x_vals) - 0.5],
                 showticklabels=False, showgrid=False, zeroline=False
             ),
-            
             margin=dict(l=50, r=0, t=25, b=0, pad=0, autoexpand=False), 
             height=175, width=590, 
             bargap=0.15,
@@ -300,7 +312,7 @@ if not df_anual.empty:
         st.download_button(
             label="📄 Descargar Reporte PDF",
             data=pdf_bytes,
-            file_name=f"Indicadores_Matriceria_PD_{anio_sel}.pdf",
+            file_name=f"FUMISCOR_MTTR_MTBF_{nombre_meses_pdf}_{anio_sel}.pdf",
             mime="application/pdf"
         )
     except Exception as e:
