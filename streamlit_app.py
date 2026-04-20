@@ -6,6 +6,24 @@ import tempfile
 import os
 
 # ==========================================
+# 0. DICCIONARIO DE MÁQUINAS (EXCLUSIVO ESTAMPADO)
+# ==========================================
+MAQUINAS_ESTAMPADO = [
+    "P-023", "P-024", "P-025", "P-026", "P-027",
+    "BAL-002", "BAL-003", "BAL-005", "BAL-006", "BAL-007", 
+    "BAL-008", "BAL-009", "BAL-010", 
+    "P-011", "P-016", "P-017", "P-018", 
+    "P-015", "P-019", "P-020", "P-021", "P-022", 
+    "GOF01",
+    "P-028", "P-029", "P-030", 
+    "BAL-011", "BAL-012", "BAL-013", "BAL-014", "BAL-015", 
+    "P-012", "P-013", "P-014"
+]
+
+# Convertimos la lista a un string formateado para SQL (ej: 'P-023','P-024'...)
+sql_maquinas_in = "'" + "','".join(MAQUINAS_ESTAMPADO) + "'"
+
+# ==========================================
 # CONFIGURACIÓN DE LA PÁGINA
 # ==========================================
 st.set_page_config(page_title="KPIs Mantenimiento - Matricería", layout="wide", page_icon="⚙️")
@@ -81,7 +99,6 @@ meses_activos = [meses_nombres.index(m) + 1 for m in meses_sel]
 
 # Lógica para nombrar el archivo: "ENE_A_MESSELECCIONADO"
 if len(meses_sel) > 1:
-    # Asume que seleccionaron en orden, toma el primero y el último
     mes_inicio = meses_sel[0].upper()
     mes_fin = meses_sel[-1].upper()
     nombre_meses_pdf = f"{mes_inicio}_A_{mes_fin}"
@@ -98,7 +115,7 @@ def fetch_annual_data(anio):
     try:
         conn = st.connection("wii_bi", type="sql")
         
-        # MODIFICACIÓN: Agregado el filtro WHERE para que solo tome Estampado
+        # MODIFICACIÓN: Filtro IN con el diccionario de máquinas
         q_uptime = f"""
             SELECT MONTH(p.Date) as Mes, 
                    SUM(p.ProductiveTime) as Tiempo_Productivo_Min,
@@ -106,12 +123,12 @@ def fetch_annual_data(anio):
             FROM PROD_D_03 p
             JOIN CELL c ON p.CellId = c.CellId
             WHERE YEAR(p.Date) = {anio}
-              AND (UPPER(c.Name) LIKE '%LINEA%' OR UPPER(c.Name) LIKE '%GENERAL%')
+              AND c.Name IN ({sql_maquinas_in})
             GROUP BY MONTH(p.Date)
         """
         df_uptime = conn.query(q_uptime)
         
-        # MODIFICACIÓN: Agregado el JOIN con CELL y el filtro para Estampado
+        # MODIFICACIÓN: Filtro IN con el diccionario de máquinas
         q_fallas = f"""
             SELECT MONTH(e.Date) as Mes, 
                    COUNT(e.Id) as Cantidad_Fallas,
@@ -123,7 +140,7 @@ def fetch_annual_data(anio):
             LEFT JOIN EVENTTYPE t4 ON e.EventTypeLevel4 = t4.EventTypeId
             LEFT JOIN CELL c ON e.CellId = c.CellId
             WHERE YEAR(e.Date) = {anio}
-              AND (UPPER(c.Name) LIKE '%LINEA%' OR UPPER(c.Name) LIKE '%GENERAL%')
+              AND c.Name IN ({sql_maquinas_in})
               AND (
                   UPPER(t1.Name) LIKE '%MATRI%' OR UPPER(t2.Name) LIKE '%MATRI%' OR UPPER(t3.Name) LIKE '%MATRI%' OR UPPER(t4.Name) LIKE '%MATRI%'
                   OR UPPER(t1.Name) LIKE '%HERRAMENTAL%' OR UPPER(t2.Name) LIKE '%HERRAMENTAL%'
