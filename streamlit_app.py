@@ -49,13 +49,11 @@ with col_btn:
         st.rerun()
 
 # ==========================================
-# OBJETIVOS (TARGETS T y C)
+# OBJETIVOS (TARGETS FIJOS PARA MTTR Y MTBF)
+# *Los objetivos de Down Time ahora son dinámicos por mes en el PDF*
 # ==========================================
-TARGET_DT_T = 5.2       
-TARGET_DT_C = 3.0       
-
-TARGET_MTTR_T = 30      
-TARGET_MTTR_C = 20      
+TARGET_MTTR_T = 30       
+TARGET_MTTR_C = 20       
 
 TARGET_MTBF_T = 600     
 TARGET_MTBF_C = 500     
@@ -140,57 +138,81 @@ def fetch_annual_data(anio):
     try:
         conn = st.connection("wii_bi", type="sql")
         
-        q_uptime = f"""
-            SELECT MONTH(p.Date) as Mes, 
-                   SUM(p.ProductiveTime) as Tiempo_Productivo_Min,
-                   SUM(p.ProductiveTime + p.DownTime) as Tiempo_Total_Disponible_Min
-            FROM PROD_D_03 p
-            JOIN CELL c ON p.CellId = c.CellId
-            WHERE YEAR(p.Date) = {anio}
-              AND c.Name IN ({sql_maquinas_in})
-            GROUP BY MONTH(p.Date)
-        """
-        df_uptime = conn.query(q_uptime)
-        
-        q_fallas = f"""
-            SELECT MONTH(e.Date) as Mes, 
-                   COUNT(e.Id) as Cantidad_Fallas,
-                   SUM(e.Interval) as Tiempo_Reparacion_Min
-            FROM EVENT_01 e
-            LEFT JOIN EVENTTYPE t1 ON e.EventTypeLevel1 = t1.EventTypeId
-            LEFT JOIN EVENTTYPE t2 ON e.EventTypeLevel2 = t2.EventTypeId
-            LEFT JOIN EVENTTYPE t3 ON e.EventTypeLevel3 = t3.EventTypeId
+        # Consulta SQL adaptada al estilo FAMMA (extrayendo todo el evento para clasificarlo)
+        q_event = f"""
+            SELECT c.Name as Máquina, e.Interval as [Tiempo (Min)], e.Date as Fecha_DT,
+                   t1.Name as [Nivel Evento 1], t2.Name as [Nivel Evento 2], 
+                   t3.Name as [Nivel Evento 3], t4.Name as [Nivel Evento 4]
+            FROM EVENT_01 e 
+            LEFT JOIN CELL c ON e.CellId = c.CellId 
+            LEFT JOIN EVENTTYPE t1 ON e.EventTypeLevel1 = t1.EventTypeId 
+            LEFT JOIN EVENTTYPE t2 ON e.EventTypeLevel2 = t2.EventTypeId 
+            LEFT JOIN EVENTTYPE t3 ON e.EventTypeLevel3 = t3.EventTypeId 
             LEFT JOIN EVENTTYPE t4 ON e.EventTypeLevel4 = t4.EventTypeId
-            LEFT JOIN CELL c ON e.CellId = c.CellId
             WHERE YEAR(e.Date) = {anio}
               AND c.Name IN ({sql_maquinas_in})
-              AND (
-                  UPPER(t1.Name) LIKE '%MATRI%' OR UPPER(t2.Name) LIKE '%MATRI%' OR UPPER(t3.Name) LIKE '%MATRI%' OR UPPER(t4.Name) LIKE '%MATRI%'
-                  OR UPPER(t1.Name) LIKE '%HERRAMENTAL%' OR UPPER(t2.Name) LIKE '%HERRAMENTAL%'
-              )
-              AND UPPER(COALESCE(t1.Name, '')) NOT LIKE '%PROYECTO%'
-              AND UPPER(COALESCE(t2.Name, '')) NOT LIKE '%PROYECTO%'
-              AND UPPER(COALESCE(t3.Name, '')) NOT LIKE '%PROYECTO%'
-              AND UPPER(COALESCE(t4.Name, '')) NOT LIKE '%PROYECTO%'
               {filtro_exclusiones_sql}
-            GROUP BY MONTH(e.Date)
         """
-        df_fallas = conn.query(q_fallas)
         
+        df = conn.query(q_event)
+        if df.empty: return pd.DataFrame()
+
+        # 1. Limpieza de Fechas
+        df['Fecha_DT'] = pd.to_datetime(df['Fecha_DT'], errors='coerce')
+        df = df.dropna(subset=['Fecha_DT'])
+
+        # 2. Limpieza de Tiempo
+        df['Tiempo (Min)'] = pd.to_numeric(df['Tiempo (Min)'], errors='coerce').fillna(0.0)
+
+        # 3. Categorizar Eventos - FILTRO EXCLUSIVO MATRICERIA
+        def categorizar_estado(row):
+            texto = " ".join([str(row.get(f'Nivel Evento {i}', '')).upper() for i in range(1, 5)])
+            
+            if 'PROYECTO' in texto: return 'Proyecto'
+            if any(x in texto for x in ['BAÑO', 'BANO', 'REFRIGERIO']): return 'Descanso'
+            if 'PARADA PROGRAMADA' in texto: return 'Parada Programada'
+            
+            # SOLO los eventos de Matricería/Herramental contabilizan como Falla/Gestión (Downtime)
+            if 'MATRI' in texto or 'HERRAMENTAL' in texto:
+                return 'Falla/Gestión'
+            
+            # Cualquier otra parada o funcionamiento suma al tiempo productivo
+            return 'Producción'
+
+        df['Estado_Global'] = df.apply(categorizar_estado, axis=1)
+
+        # 4. Agrupar Matemáticas
+        df['Mes'] = df['Fecha_DT'].dt.month
         df_meses = pd.DataFrame({'Mes': range(1, 13)})
-        df_anual = pd.merge(df_meses, df_uptime, on='Mes', how='left')
-        df_anual = pd.merge(df_anual, df_fallas, on='Mes', how='left').fillna(0)
         
+        # TODO EL TIEMPO (Total del turno con descansos y paradas incluidas para el denominador de DT)
+        tiempo_total_mes = df.groupby('Mes')['Tiempo (Min)'].sum().reset_index(name='Tiempo_Total_Turnos_Min')
+        
+        # UPTIME (Producción pura + todo el tiempo que no fue falla de matricería)
+        uptime = df[df['Estado_Global'] == 'Producción'].groupby('Mes')['Tiempo (Min)'].sum().reset_index(name='Tiempo_Productivo_Min')
+        
+        # DOWNTIME (Fallas y Gestión - Exclusivo de Matricería)
+        fallas = df[df['Estado_Global'] == 'Falla/Gestión'].groupby('Mes').agg(
+            Cantidad_Fallas=('Tiempo (Min)', 'count'),
+            Tiempo_Reparacion_Min=('Tiempo (Min)', 'sum')
+        ).reset_index()
+
+        df_anual = pd.merge(df_meses, tiempo_total_mes, on='Mes', how='left').fillna(0)
+        df_anual = pd.merge(df_anual, uptime, on='Mes', how='left').fillna(0)
+        df_anual = pd.merge(df_anual, fallas, on='Mes', how='left').fillna(0)
+        
+        # 5. Calcular Indicadores Clave
         df_anual['Uptime_Min'] = df_anual['Tiempo_Productivo_Min']
         df_anual['Downtime_Min'] = df_anual['Tiempo_Reparacion_Min']
         
-        df_anual['DT (%)'] = df_anual.apply(lambda r: (r['Downtime_Min'] / r['Tiempo_Total_Disponible_Min'] * 100) if r['Tiempo_Total_Disponible_Min'] > 0 else 0, axis=1)
+        df_anual['DT (%)'] = df_anual.apply(lambda r: (r['Downtime_Min'] / r['Tiempo_Total_Turnos_Min'] * 100) if r['Tiempo_Total_Turnos_Min'] > 0 else 0, axis=1)
         df_anual['MTBF (Min)'] = df_anual.apply(lambda r: r['Uptime_Min'] / r['Cantidad_Fallas'] if r['Cantidad_Fallas'] > 0 else (r['Uptime_Min'] if r['Uptime_Min'] > 0 else 0), axis=1)
         df_anual['MTTR (Min)'] = df_anual.apply(lambda r: r['Downtime_Min'] / r['Cantidad_Fallas'] if r['Cantidad_Fallas'] > 0 else 0, axis=1)
         
+        # 6. Acumulados (YTD)
         df_anual['Cum_Uptime'] = df_anual['Uptime_Min'].cumsum()
         df_anual['Cum_Downtime'] = df_anual['Downtime_Min'].cumsum()
-        df_anual['Cum_TotalTime'] = df_anual['Tiempo_Total_Disponible_Min'].cumsum()
+        df_anual['Cum_TotalTime'] = df_anual['Tiempo_Total_Turnos_Min'].cumsum()
         df_anual['Cum_Fallas'] = df_anual['Cantidad_Fallas'].cumsum()
 
         df_anual['A_DT (%)'] = df_anual.apply(lambda r: (r['Cum_Downtime'] / r['Cum_TotalTime'] * 100) if r['Cum_TotalTime'] > 0 else 0, axis=1)
@@ -202,7 +224,8 @@ def fetch_annual_data(anio):
         st.error(f"Error consultando BD: {e}")
         return pd.DataFrame()
 
-df_anual = fetch_annual_data(anio_sel)
+with st.spinner("Conectando con SQL Server y calculando métricas..."):
+    df_anual = fetch_annual_data(anio_sel)
 
 # ==========================================
 # GENERADOR PDF DINÁMICO
@@ -230,7 +253,16 @@ def crear_pdf_pd_excel(df_data, anio, meses_filtrados):
     meses_letras = ['E', 'F', 'M', 'A', 'M', 'J', 'J', 'A', 'S', 'O', 'N', 'D']
     num_meses = len(meses_filtrados)
 
-    def generar_grafico_tendencia_pdf(df, col_real, obj_t, obj_c, is_pct):
+    # Lógica dinámica de objetivos de Down Time por mes
+    def obtener_objetivos_dt(mes):
+        if mes <= 9:      # Enero a Septiembre
+            return 7.0, 5.0
+        elif mes == 10:   # Octubre
+            return 5.0, 4.0
+        else:             # Noviembre y Diciembre
+            return 2.5, 2.0
+
+    def generar_grafico_tendencia_pdf(df, col_real, obj_t_list, obj_c_list, is_pct):
         df_plot = df[df['Mes'].isin(meses_filtrados)].copy()
         
         y_vals = df_plot[col_real].tolist()
@@ -243,13 +275,15 @@ def crear_pdf_pd_excel(df_data, anio, meses_filtrados):
             x=x_vals, y=y_vals, name="Real (A)",
             marker_color='#1f77b4', text=text_format, textposition='auto', textfont=dict(size=12)
         ))
+        
         fig.add_trace(go.Scatter(
-            x=x_vals, y=[obj_t] * len(x_vals), name="Sup. (T)",
-            mode='lines', line=dict(color='red', dash='dash', width=2)
+            x=x_vals, y=obj_t_list, name="Sup. (T)",
+            mode='lines+markers', line=dict(color='red', dash='dash', width=2)
         ))
+        
         fig.add_trace(go.Scatter(
-            x=x_vals, y=[obj_c] * len(x_vals), name="Inf. (C)",
-            mode='lines', line=dict(color='orange', dash='dot', width=2)
+            x=x_vals, y=obj_c_list, name="Inf. (C)",
+            mode='lines+markers', line=dict(color='orange', dash='dot', width=2)
         ))
         
         y_title = "Porcentaje (%)" if is_pct else "Minutos"
@@ -276,7 +310,7 @@ def crear_pdf_pd_excel(df_data, anio, meses_filtrados):
         fig.write_image(tmp_chart.name) 
         return tmp_chart.name
 
-    def dibujar_bloque_completo(x, y, titulo, obj_t, obj_c, col_real, col_acum, is_lower_better, is_pct=False):
+    def dibujar_bloque_completo(x, y, titulo, obj_t_list, obj_c_list, col_real, col_acum, is_lower_better, is_pct=False):
         w_lbl = 10      
         w_tot = 118 
         w_m = (w_tot - w_lbl) / num_meses 
@@ -286,7 +320,7 @@ def crear_pdf_pd_excel(df_data, anio, meses_filtrados):
         pdf.set_text_color(255, 255, 255); pdf.set_fill_color(31, 78, 121); pdf.set_draw_color(0, 0, 0); pdf.set_line_width(0.2)
         pdf.cell(w_tot, 5, "  " + titulo, border=1, align='L', fill=True)
 
-        img_path = generar_grafico_tendencia_pdf(df_data, col_real, obj_t, obj_c, is_pct)
+        img_path = generar_grafico_tendencia_pdf(df_data, col_real, obj_t_list, obj_c_list, is_pct)
         pdf.image(img_path, x=x, y=y + 5, w=w_tot, h=35)
         os.remove(img_path)
 
@@ -304,8 +338,8 @@ def crear_pdf_pd_excel(df_data, anio, meses_filtrados):
         pdf.set_fill_color(255, 255, 255)
         pdf.cell(w_lbl, 5, "T", border=1, align='C', fill=True)
         pdf.set_font("Arial", '', 7)
-        t_str = f"{obj_t}%" if is_pct else f"{obj_t}"
-        for _ in meses_filtrados: 
+        for t_val in obj_t_list: 
+            t_str = f"{t_val}%" if is_pct else f"{t_val}"
             pdf.cell(w_m, 5, t_str, border=1, align='C', fill=True) 
             
         pdf.set_xy(x, y_tabla + 10)
@@ -313,8 +347,8 @@ def crear_pdf_pd_excel(df_data, anio, meses_filtrados):
         pdf.set_fill_color(221, 235, 247)
         pdf.cell(w_lbl, 5, "C", border=1, align='C', fill=True)
         pdf.set_font("Arial", '', 7)
-        c_str = f"{obj_c}%" if is_pct else f"{obj_c}"
-        for _ in meses_filtrados: 
+        for c_val in obj_c_list: 
+            c_str = f"{c_val}%" if is_pct else f"{c_val}"
             pdf.cell(w_m, 5, c_str, border=1, align='C', fill=True)
             
         pdf.set_xy(x, y_tabla + 15)
@@ -323,17 +357,21 @@ def crear_pdf_pd_excel(df_data, anio, meses_filtrados):
         pdf.cell(w_lbl, 5, "A", border=1, align='C', fill=True)
         pdf.set_font("Arial", 'B', 7)
         
-        for i in meses_filtrados:
+        for idx, i in enumerate(meses_filtrados):
             val_a = df_data[df_data['Mes'] == i][col_real].values[0]
-            if df_data[df_data['Mes'] == i]['Tiempo_Total_Disponible_Min'].values[0] > 0:
+            obj_t_mes = obj_t_list[idx]
+            obj_c_mes = obj_c_list[idx]
+            
+            # Evaluamos contra Tiempo_Total_Turnos_Min para validar si hubo operación ese mes
+            if df_data[df_data['Mes'] == i]['Tiempo_Total_Turnos_Min'].values[0] > 0:
                 val_str = f"{val_a:.1f}%" if is_pct else f"{val_a:.0f}" 
                 if is_lower_better:
-                    if val_a <= obj_c: pdf.set_text_color(33, 195, 84)        
-                    elif val_a > obj_t: pdf.set_text_color(220, 20, 20)      
+                    if val_a <= obj_c_mes: pdf.set_text_color(33, 195, 84)        
+                    elif val_a > obj_t_mes: pdf.set_text_color(220, 20, 20)      
                     else: pdf.set_text_color(200, 150, 0)                    
                 else:
-                    if val_a >= obj_t: pdf.set_text_color(33, 195, 84)        
-                    elif val_a < obj_c: pdf.set_text_color(220, 20, 20)      
+                    if val_a >= obj_t_mes: pdf.set_text_color(33, 195, 84)        
+                    elif val_a < obj_c_mes: pdf.set_text_color(220, 20, 20)      
                     else: pdf.set_text_color(200, 150, 0)                    
             else:
                 val_str = "-"
@@ -342,9 +380,20 @@ def crear_pdf_pd_excel(df_data, anio, meses_filtrados):
         
         pdf.set_text_color(0,0,0) 
 
-    dibujar_bloque_completo(x=20, y=25, titulo="Down Time Matriceria", obj_t=TARGET_DT_T, obj_c=TARGET_DT_C, col_real='DT (%)', col_acum='A_DT (%)', is_lower_better=True, is_pct=True)
-    dibujar_bloque_completo(x=150, y=25, titulo="MTTR - Tiempo medio parada (Min)", obj_t=TARGET_MTTR_T, obj_c=TARGET_MTTR_C, col_real='MTTR (Min)', col_acum='A_MTTR (Min)', is_lower_better=True)
-    dibujar_bloque_completo(x=20, y=95, titulo="MTBF - Tiempo medio entre fallas (Min)", obj_t=TARGET_MTBF_T, obj_c=TARGET_MTBF_C, col_real='MTBF (Min)', col_acum='A_MTBF (Min)', is_lower_better=False)
+    # Generar las listas dinámicas según los meses filtrados
+    dt_t_list, dt_c_list = [], []
+    for m in meses_filtrados:
+        t, c = obtener_objetivos_dt(m)
+        dt_t_list.append(t)
+        dt_c_list.append(c)
+        
+    mttr_t_list, mttr_c_list = [TARGET_MTTR_T]*num_meses, [TARGET_MTTR_C]*num_meses
+    mtbf_t_list, mtbf_c_list = [TARGET_MTBF_T]*num_meses, [TARGET_MTBF_C]*num_meses
+
+    # Dibujar los tres bloques usando las listas dinámicas
+    dibujar_bloque_completo(x=20, y=25, titulo="Down Time Matriceria", obj_t_list=dt_t_list, obj_c_list=dt_c_list, col_real='DT (%)', col_acum='A_DT (%)', is_lower_better=True, is_pct=True)
+    dibujar_bloque_completo(x=150, y=25, titulo="MTTR - Tiempo medio parada (Min)", obj_t_list=mttr_t_list, obj_c_list=mttr_c_list, col_real='MTTR (Min)', col_acum='A_MTTR (Min)', is_lower_better=True)
+    dibujar_bloque_completo(x=20, y=95, titulo="MTBF - Tiempo medio entre fallas (Min)", obj_t_list=mtbf_t_list, obj_c_list=mtbf_c_list, col_real='MTBF (Min)', col_acum='A_MTBF (Min)', is_lower_better=False)
 
     return pdf.output(dest='S').encode('latin-1')
 
